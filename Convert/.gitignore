@@ -1,0 +1,25 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+
+# Mac system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# VS Code
+.vscode/
+*.code-workspace.env
+cookies.firefox-private.txt
+.env
+firefox-cookies.txt
+
+# Downloaded files
+.mp3
+.mp4
+.webm
+.mkv
+.m4a

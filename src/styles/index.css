@@ -1,0 +1,74 @@
+@import './fonts.css';
+@import './tailwind.css';
+@import './theme.css';
+
+html, body {
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Micro-animations: Equalizer */
+@keyframes eq-bar {
+  0% { height: 4px; }
+  50% { height: 16px; }
+  100% { height: 4px; }
+}
+
+/* Shimmer animation for the progress bar while playing */
+@keyframes progress-shimmer {
+  0% { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+
+
+.eq-bar {
+  width: 3px;
+  background-color: #a78bfa; /* tailwind violet-400 */
+  border-radius: 2px;
+  animation: eq-bar 1s ease-in-out infinite;
+}
+
+.eq-bar:nth-child(1) { animation-delay: 0.0s; }
+.eq-bar:nth-child(2) { animation-delay: 0.2s; }
+.eq-bar:nth-child(3) { animation-delay: 0.4s; }
+.eq-bar:nth-child(4) { animation-delay: 0.1s; }
+
+/* Page Transitions */
+.fade-enter {
+  opacity: 0;
+  transform: translateY(10px);
+}
+.fade-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 300ms ease-out, transform 300ms ease-out;
+}
+
+/* Chameleon Effect Gradient */
+.chameleon-bg {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--dynamic-bg) 40%, transparent) 0%, #000000 100%);
+  transition: background 1.5s ease-in-out;
+}
+
+/* Hide scrollbar for Chrome, Safari and Opera */
+::-webkit-scrollbar {
+  display: none;
+}
+
+/* Hide scrollbar for IE, Edge and Firefox */
+* {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}

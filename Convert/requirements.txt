@@ -1,0 +1,5 @@
+gradio==6.0.2
+yt-dlp
+ffmpeg-python
+python-dotenv
+requests

@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Vibe no Sekai</string>
+    <string name="title_activity_main">Vibe no Sekai</string>
+    <string name="package_name">com.kirito.vibenosekai</string>
+    <string name="custom_url_scheme">com.kirito.vibenosekai</string>
+    <string name="default_web_client_id">984689415751-42lprqco64go2g18s1asmp1pnghtr890.apps.googleusercontent.com</string>
+</resources>

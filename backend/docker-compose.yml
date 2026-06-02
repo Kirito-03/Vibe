@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # ──────────────── PostgreSQL ────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: vns_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB: ${DB_NAME:-vibe}
+    networks:
+      - vibe_net
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-vibe}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────── Python Downloader ────────────────
+  downloader:
+    build:
+      context: ../Convert
+      dockerfile: Dockerfile
+    container_name: vns_convert
+    restart: unless-stopped
+    environment:
+      STORAGE_DIR: /shared/downloads
+      FFMPEG_PATH: ""
+      USE_FIREFOX_COOKIES: "False"
+    networks:
+      - vibe_net
+    volumes:
+      - media_files:/shared/downloads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    expose:
+      - "8000"
+
+  # ──────────────── Node.js Backend ────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vns_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      downloader:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_NAME: ${DB_NAME:-vibe}
+      DOWNLOADER_URL: http://downloader:8000
+      MEDIA_BASE_DIR: /shared/downloads
+      PORT: 3000
+      # Clave para Android: Incluimos localhost y capacitor://localhost
+      CORS_ORIGINS: "https://vibenosekai.art,https://www.vibenosekai.art,http://localhost,capacitor://localhost"
+    volumes:
+      - media_files:/shared/downloads:ro
+      - ./backend/cla2.json:/app/cla2.json:ro
+    networks:
+      - vibe_net
+    # LAS ETIQUETAS DEL GENERAL TRAEFIK
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vns-backend.rule=Host(`api.vibenosekai.art`)"
+      - "traefik.http.routers.vns-backend.entrypoints=websecure"
+      - "traefik.http.routers.vns-backend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.vns-backend.loadbalancer.server.port=3000"
+    expose:
+      - "3000"
+
+# ──────────────── Configuración de Red y Almacenamiento ────────────────
+networks:
+  vibe_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  media_files:

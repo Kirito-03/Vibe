@@ -1,0 +1,156 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: vns_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB: ${DB_NAME:-vibe}
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/scripts/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-vibe}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  frontend:
+    image: nginx:alpine
+    container_name: vns_frontend
+    restart: unless-stopped
+    profiles: ["prod"]
+    expose:
+      - "80"
+    volumes:
+      - ./dist:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - internal
+
+  frontend_dev:
+    image: node:20-alpine
+    container_name: vns_frontend_dev
+    profiles: ["dev"]
+    working_dir: /app
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE: ""
+    volumes:
+      - ./:/app
+      - /app/node_modules
+    command: ["sh", "-lc", "npm ci && npm run dev -- --host 0.0.0.0 --port 5173"]
+    depends_on:
+      - backend
+    networks:
+      - internal
+
+  convert:
+    build:
+      context: ./Convert
+      dockerfile: Dockerfile
+    container_name: vns_convert
+    restart: unless-stopped
+    dns:
+      - 172.28.0.53
+    expose:
+      - "8000"
+    environment:
+      STORAGE_DIR: /app/downloads
+      PYTHONUNBUFFERED: "1"
+      YTDLP_PROXY: ${YTDLP_PROXY:-}
+      YTDLP_COOKIES_PATH: /app/cookies.txt
+      CONVERT_SEARCH_TIMEOUT_MS: ${CONVERT_SEARCH_TIMEOUT_MS:-15000}
+      CONVERT_SEARCH_CACHE_TTL_MS: ${CONVERT_SEARCH_CACHE_TTL_MS:-900000}
+      MEDIA_WORKER_URL: ${MEDIA_WORKER_URL:-}
+      MEDIA_WORKER_ENABLED: ${MEDIA_WORKER_ENABLED:-false}
+      MEDIA_WORKER_TIMEOUT_MS: ${MEDIA_WORKER_TIMEOUT_MS:-30000}
+    volumes:
+      - mp3_storage:/app/downloads
+      - ./Convert/cookies.txt:/app/cookies.txt:ro
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+    networks:
+      - internal
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vns_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      convert:
+        condition: service_started
+    expose:
+      - "3000"
+    env_file:
+      - ./backend/.env.docker
+    environment:
+      PORT: "3000"
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_NAME: ${DB_NAME:-vibe}
+      CONVERT_URL: ${CONVERT_URL:-http://convert:8000}
+      CONVERT_TIMEOUT_MS: ${CONVERT_TIMEOUT_MS:-20000}
+      DOWNLOADER_URL: ${CONVERT_URL:-http://convert:8000}
+      MEDIA_WORKER_URL: ${MEDIA_WORKER_URL:-}
+      MEDIA_WORKER_ENABLED: ${MEDIA_WORKER_ENABLED:-false}
+      MEDIA_WORKER_TIMEOUT_MS: ${MEDIA_WORKER_TIMEOUT_MS:-30000}
+      DEEPSEEK_RECOMMENDATIONS_ENABLED: ${DEEPSEEK_RECOMMENDATIONS_ENABLED:-false}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      DEEPSEEK_TIMEOUT_MS: ${DEEPSEEK_TIMEOUT_MS:-5000}
+      DEEPSEEK_MAX_QUERIES: ${DEEPSEEK_MAX_QUERIES:-8}
+      RECOMMENDATION_SEEN_TTL_HOURS: ${RECOMMENDATION_SEEN_TTL_HOURS:-24}
+    dns:
+      - 172.28.0.53
+    volumes:
+      - mp3_storage:/app/downloads
+      - ./backend/cla2.json:/app/cla2.json:ro
+    networks:
+      - internal
+
+  dns:
+    image: m13253/dns-over-https-client:latest
+    container_name: vns_dns
+    restart: unless-stopped
+    expose:
+      - "53/udp"
+      - "53/tcp"
+    networks:
+      internal:
+        ipv4_address: 172.28.0.53
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: vns_tunnel
+    restart: unless-stopped
+    profiles: ["prod"]
+    command: ["tunnel", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - internal
+
+volumes:
+  postgres_data:
+  mp3_storage:
+
+networks:
+  internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
