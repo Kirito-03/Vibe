@@ -13,6 +13,7 @@ import { LoadErrorState } from './LoadErrorState';
 import { makeSafeYoutubeWatchUrl } from '../track';
 import { TrackCover } from './TrackCover';
 import { TrackFeedbackMenu } from './TrackFeedbackMenu';
+import { useHomeData } from '../context/HomeDataContext';
 
 // Trigger auto-refresh for Vite HMR
 interface Download {
@@ -50,39 +51,35 @@ export function Home({
   onExplore,
 }: HomeProps) {
   const { playlists } = useMusic();
-  const [randomPicks, setRandomPicks] = useState<Download[]>([]);
-  const [history, setHistory] = useState<Song[]>([]);
-  const [recommendations, setRecommendations] = useState<Download[]>([]);
-  const [forYouError, setForYouError] = useState<string | null>(null);
-  const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
+  const home = useHomeData();
+  const randomPicks = home.forYouItems as Download[];
+  const history = home.recentTracks as Song[];
+  const recommendations = home.recommendationsItems as Download[];
+  const forYouError = home.forYouError;
+  const recommendationsError = home.recommendationsError;
   const [retryTick, setRetryTick] = useState(0);
-  const [isLoadingForYou, setIsLoadingForYou] = useState(false);
-  const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(false);
-  const [forYouSource, setForYouSource] = useState<string>('');
-  const [discoverSource, setDiscoverSource] = useState<string>('');
+  const isLoadingForYou = home.isLoadingForYou;
+  const isLoadingRecommendations = home.isLoadingRecommendations;
+  const forYouSource = home.forYouSource;
+  const discoverSource = home.recommendationsSource;
   const [refreshNonce, setRefreshNonce] = useState<number>(0);
   const lastSeenMarkRef = useRef<string>('');
 
   useEffect(() => {
     if (!user) {
-      setForYouError(null);
-      setRecommendationsError(null);
-      setIsLoadingForYou(false);
-      setIsLoadingRecommendations(false);
-      setForYouSource('');
-      setDiscoverSource('');
-      setRandomPicks([]);
-      setRecommendations([]);
+      home.clearHomeDataCache();
       return;
     }
-    setForYouError(null);
-    setRecommendationsError(null);
+    home.setForYouError(null);
+    home.setRecommendationsError(null);
   }, [user, retryTick, refreshNonce]);
 
   // Sincronizar el historial en tiempo real cuando cambia la canción
   useEffect(() => {
     if (!user) {
-      setHistory([]);
+      return;
+    }
+    if (home.isFresh() && retryTick === 0 && refreshNonce === 0) {
       return;
     }
 
@@ -134,7 +131,7 @@ export function Home({
         });
         
         const songs = Array.from(uniqueSongs.values()).filter((s) => Boolean(s.title) && Boolean(s.file_url));
-        setHistory(songs.slice(0, 12)); // Limit to 12 for UI display
+        home.setRecentTracks(songs.slice(0, 12)); // Limit to 12 for UI display
 
         // -- Personalizar sugerencias basadas en el historial
         let seedForYou = 'top hits 2026';
@@ -208,7 +205,7 @@ export function Home({
         };
 
         const loadForYou = async (seed: string) => {
-          setIsLoadingForYou(true);
+          home.setIsLoadingForYou(true);
           try {
             let items: any[] = [];
             let source = '';
@@ -238,16 +235,17 @@ export function Home({
             if (import.meta.env.DEV)
               console.debug('[home/for-you]', { seed, source, items: items.length, error: lastError?.name || lastError?.message });
 
-            setRandomPicks(items.slice(0, 30));
-            setForYouError(items.length === 0 && lastError ? 'No pudimos cargar esta sección' : null);
-            setForYouSource(items.length === 0 ? 'empty' : source || '');
+            home.setForYouItems(items.slice(0, 30));
+            home.setForYouError(items.length === 0 && lastError ? 'No pudimos cargar esta sección' : null);
+            home.setForYouSource(items.length === 0 ? 'empty' : source || '');
           } finally {
-            setIsLoadingForYou(false);
+            home.setIsLoadingForYou(false);
+            home.markLoaded();
           }
         };
 
         const loadDiscover = async (seed: string) => {
-          setIsLoadingRecommendations(true);
+          home.setIsLoadingRecommendations(true);
           try {
             let items: any[] = [];
             let source = '';
@@ -282,32 +280,33 @@ export function Home({
                 error: lastError?.name || lastError?.message,
               });
 
-            setRecommendations(items.slice(0, 30));
-            setRecommendationsError(items.length === 0 && lastError ? 'No pudimos cargar esta sección' : null);
-            setDiscoverSource(items.length === 0 ? 'empty' : source || '');
+            home.setRecommendationsItems(items.slice(0, 30));
+            home.setRecommendationsError(items.length === 0 && lastError ? 'No pudimos cargar esta sección' : null);
+            home.setRecommendationsSource(items.length === 0 ? 'empty' : source || '');
           } finally {
-            setIsLoadingRecommendations(false);
+            home.setIsLoadingRecommendations(false);
+            home.markLoaded();
           }
         };
 
         loadForYou(seedForYou).catch((e: any) => {
           console.error(e);
-          setRandomPicks([]);
-          setForYouError(e?.message ? String(e.message) : String(e));
-          setIsLoadingForYou(false);
-          setForYouSource('');
+          home.setForYouItems([]);
+          home.setForYouError(e?.message ? String(e.message) : String(e));
+          home.setIsLoadingForYou(false);
+          home.setForYouSource('');
         });
           
         loadDiscover(seedRecs).catch((e: any) => {
           console.error(e);
-          setRecommendations([]);
-          setRecommendationsError(e?.message ? String(e.message) : String(e));
-          setIsLoadingRecommendations(false);
-          setDiscoverSource('');
+          home.setRecommendationsItems([]);
+          home.setRecommendationsError(e?.message ? String(e.message) : String(e));
+          home.setIsLoadingRecommendations(false);
+          home.setRecommendationsSource('');
         });
           
       })
-      .catch(() => setHistory([]));
+      .catch(() => home.setRecentTracks([]));
   }, [user, retryTick, refreshNonce]);
 
   useEffect(() => {
@@ -435,7 +434,7 @@ export function Home({
         apiFetchItems<any>(`/api/music/for-you`)
           .then(({ items }) => {
             if (Array.isArray(items) && items.length > 0) {
-              setRandomPicks((prev) => {
+              home.setForYouItems((prev) => {
                 const newIds = new Set(prev.map((p) => p.id));
                 const uniqueNew = items.filter((d: any) => !newIds.has(d.id));
                 return [...prev, ...uniqueNew];
@@ -449,7 +448,7 @@ export function Home({
         apiFetchItems<any>(`/api/music/recommendations`)
           .then(({ items }) => {
             if (Array.isArray(items) && items.length > 0) {
-              setRecommendations((prev) => {
+              home.setRecommendationsItems((prev) => {
                 const newIds = new Set(prev.map((p) => p.id));
                 const uniqueNew = items.filter((d: any) => !newIds.has(d.id));
                 return [...prev, ...uniqueNew];
@@ -592,7 +591,7 @@ export function Home({
                 message={forYouError.startsWith('HTTP 503') ? 'Intenta nuevamente en unos segundos' : 'Intenta nuevamente en unos segundos'}
                 isLoading={isLoadingForYou}
                 onRetry={() => {
-                  setForYouError(null);
+                  home.setForYouError(null);
                   setRetryTick((t) => t + 1);
                 }}
               />
@@ -668,10 +667,10 @@ export function Home({
                         onApplied={(type) => {
                           if (type === 'not_this_track') {
                             const myId = String(d.youtube_id || d.id || '');
-                            setRandomPicks((prev) => prev.filter((x: any) => String(x.youtube_id || x.id || '') !== myId));
+                            home.setForYouItems((prev) => prev.filter((x: any) => String(x.youtube_id || x.id || '') !== myId));
                           } else if (type === 'not_this_artist') {
                             const myArtist = String(song.artist || '').trim();
-                            setRandomPicks((prev) =>
+                            home.setForYouItems((prev) =>
                               prev.filter((x: any) => String(x.artist || x.uploader || '').trim() !== myArtist)
                             );
                           } else {
@@ -747,7 +746,7 @@ export function Home({
                 message={recommendationsError.startsWith('HTTP 503') ? 'Intenta nuevamente en unos segundos' : 'Intenta nuevamente en unos segundos'}
                 isLoading={isLoadingRecommendations}
                 onRetry={() => {
-                  setRecommendationsError(null);
+                  home.setRecommendationsError(null);
                   setRetryTick((t) => t + 1);
                 }}
               />
@@ -822,10 +821,10 @@ export function Home({
                         onApplied={(type) => {
                           if (type === 'not_this_track') {
                             const myId = String(d.youtube_id || d.id || '');
-                            setRecommendations((prev) => prev.filter((x: any) => String(x.youtube_id || x.id || '') !== myId));
+                            home.setRecommendationsItems((prev) => prev.filter((x: any) => String(x.youtube_id || x.id || '') !== myId));
                           } else if (type === 'not_this_artist') {
                             const myArtist = String(song.artist || '').trim();
-                            setRecommendations((prev) =>
+                            home.setRecommendationsItems((prev) =>
                               prev.filter((x: any) => String(x.artist || x.uploader || '').trim() !== myArtist)
                             );
                           } else {

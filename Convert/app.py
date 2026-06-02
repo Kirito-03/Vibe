@@ -444,8 +444,8 @@ def search_youtube(q: str, limit: int = 5):
         limit = 5
     if limit < 1:
         limit = 1
-    if limit > 10:
-        limit = 10
+    if limit > 15:
+        limit = 15
 
     cache_key = f"{q_norm}:{limit}"
     cached = _cache_get(cache_key)

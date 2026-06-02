@@ -6,7 +6,7 @@ import { auth, db } from '../../firebaseConfig';
 import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, deleteDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'motion/react';
-import { apiFetch, API_BASE } from '../api';
+import { apiFetch, apiFetchItems, API_BASE } from '../api';
 import { useAppSettings } from '../context/AppSettingsContext';
 import { LoadErrorState } from './LoadErrorState';
 import { makeSafeYoutubeWatchUrl } from '../track';
@@ -44,6 +44,7 @@ export function Search({ onSongPlay, currentSong, isPlaying }: SearchProps) {
   const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [lastDebug, setLastDebug] = useState<any | null>(null);
 
   const normalizeQuery = (value: string) => value.trim().toLowerCase().replace(/\s+/g, ' ');
 
@@ -252,26 +253,38 @@ export function Search({ onSongPlay, currentSong, isPlaying }: SearchProps) {
   useEffect(() => {
     if (searchQuery.trim() === '') {
       setSearchResults([]);
+      setLastDebug(null);
+      setSearchError(null);
+      setLoading(false);
       return;
     }
 
     setLoading(true);
     setSearchError(null);
+    const controller = new AbortController();
     const debounce = setTimeout(async () => {
       try {
-        const res = await apiFetch(`/api/music/search?q=${encodeURIComponent(searchQuery)}`);
+        const { res, items, debug } = await apiFetchItems<any>(
+          `/api/music/search?q=${encodeURIComponent(searchQuery)}&mode=search`,
+          { signal: controller.signal }
+        );
         if (!res.ok) {
           const text = await res.text().catch(() => '');
           throw new Error(`HTTP ${res.status}${text ? `: ${text}` : ''}`);
         }
-        const data = await res.json().catch(() => null);
-        if (!Array.isArray(data) || data.length === 0) {
+        const nextItems = Array.isArray(items) ? items : [];
+        if (nextItems.length === 0) {
           setSearchResults([]);
-          setSearchError('Sin resultados (0)');
+          setSearchError(null);
+          setLastDebug(debug ?? null);
+          if (import.meta.env.DEV && debug) console.log('[search][debug]', debug);
           return;
         }
-        setSearchResults(data);
+        setSearchResults(nextItems);
+        setLastDebug(debug ?? null);
+        if (import.meta.env.DEV && debug) console.log('[search][debug]', debug);
       } catch (error: unknown) {
+        if (controller.signal.aborted) return;
         let msg = 'Error desconocido';
         if (error instanceof Error) msg = error.message;
         else if (typeof error === 'string') msg = error;
@@ -284,12 +297,16 @@ export function Search({ onSongPlay, currentSong, isPlaying }: SearchProps) {
         }
         setSearchError(msg);
         setSearchResults([]);
+        setLastDebug(null);
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
-    }, 300);
+    }, 450);
 
-    return () => clearTimeout(debounce);
+    return () => {
+      clearTimeout(debounce);
+      controller.abort();
+    };
   }, [searchQuery, retryTick]);
 
   return (

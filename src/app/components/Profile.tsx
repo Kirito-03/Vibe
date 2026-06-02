@@ -8,6 +8,7 @@ import { EditProfile } from './EditProfile';
 import { useAppSettings } from '../context/AppSettingsContext';
 import { apiClearRecommendationCache, apiClearSeenTracks, apiFetch } from '../api';
 import { usePlayback } from '../context/PlaybackContext';
+import { useHomeData } from '../context/HomeDataContext';
 
 interface ProfileProps {
   user: FirebaseUser | null;
@@ -30,6 +31,7 @@ export function Profile({ user, onLogout, onProfileUpdate }: ProfileProps) {
   const [recoSuccess, setRecoSuccess] = useState<string | null>(null);
   const { settings, updateSettings, isReady } = useAppSettings();
   const playback = usePlayback();
+  const homeData = useHomeData();
 
   const confirmText = 'RESET_MY_VIBE_DATA';
   const canReset = useMemo(() => resetConfirm.trim() === confirmText, [resetConfirm]);
@@ -77,6 +79,7 @@ export function Profile({ user, onLogout, onProfileUpdate }: ProfileProps) {
       }
       playback.reset();
       clearVnsLocalStorage();
+      homeData.clearHomeDataCache();
       setShowReset(false);
       setResetConfirm('');
       setTimeout(() => window.location.reload(), 80);
@@ -102,6 +105,7 @@ export function Profile({ user, onLogout, onProfileUpdate }: ProfileProps) {
           ? `Listo. Se limpiaron ${deleted ?? 'varios'} registros de canciones vistas.`
           : `Listo. Se limpiaron ${deleted ?? 'varios'} registros de caché de recomendaciones.`
       );
+      homeData.clearHomeDataCache();
       setRecoAction(null);
       setRecoConfirm('');
     } catch {

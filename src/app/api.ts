@@ -19,6 +19,7 @@ export type ItemsResponse<T> = {
     | 'recent'
     | 'favorites'
     | 'downloads'
+    | 'search'
     | 'default-search'
     | 'worker'
     | 'global'

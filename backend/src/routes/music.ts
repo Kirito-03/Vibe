@@ -5,6 +5,9 @@ import { admin } from '../firebase';
 import type { ItemsResponse, ItemsSource } from '../utils/response';
 import { isWorkerEnabled, searchWithWorker, workerHealth } from '../services/mediaWorkerClient';
 import { computeMusicProfileHash, generateMusicSeedsWithDeepSeek, mixQueries, type MusicTasteProfile } from '../services/deepseekRecommendations';
+import { getSearchQueryAlternatives } from '../services/searchAiAssist';
+import { normalizeSearchQuery, normalizeText as normalizeSearchText, rankSearchResults } from '../services/searchRanking';
+import { rankRecommendationResults } from '../services/recommendationRanking';
 import {
   clearUserRecommendationCache,
   clearUserSeenTracks,
@@ -1073,6 +1076,8 @@ router.get('/for-you', async (req, res) => {
       } catch {}
     }
 
+    finalHealed = rankRecommendationResults({ seed: rawSeed || usedQuery, items: finalHealed, profile });
+
     const response: any = {
       items: finalHealed,
       source: finalHealed.length > 0 ? finalSource : 'empty',
@@ -1141,7 +1146,7 @@ router.get('/for-you', async (req, res) => {
     }
   }
 });
-router.get('/recommendations', async (req, res) => {
+const recommendationsHandler = async (req: any, res: any) => {
   const reqId = makeReqId();
   const { seed, exclude } = req.query;
   const uid = String((req as any)?.user?.uid || '').trim();
@@ -1187,6 +1192,7 @@ router.get('/recommendations', async (req, res) => {
     const recentSearches: string[] = [];
     const artistPool: string[] = [];
     let currentTrack: { title?: string; artist?: string } | null = null;
+    let profile: MusicTasteProfile | null = null;
 
     let profileHash = '';
     let cacheHit = false;
@@ -1309,7 +1315,7 @@ router.get('/recommendations', async (req, res) => {
         .map(([name]) => name)
         .slice(0, 6);
 
-      const profile: MusicTasteProfile = {
+      const profileObj: MusicTasteProfile = {
         userId: uid,
         topArtists,
         topGenres: [],
@@ -1319,15 +1325,16 @@ router.get('/recommendations', async (req, res) => {
         currentTrack,
         preferredLanguage: 'es',
       };
+      profile = profileObj;
 
       const profileForHash: MusicTasteProfile = {
-        ...profile,
+        ...profileObj,
         recentSearches: [
           ...(rawSeed ? [rawSeed] : []),
           ...(positiveSeeds || []),
           ...Array.from(blockedArtists).map((a) => `!a:${a}`),
           ...Array.from(blockedTrackKeys).map((t) => `!t:${t}`),
-          ...(profile.recentSearches || []),
+          ...(profileObj.recentSearches || []),
         ].slice(0, 30),
       };
       profileHash = computeMusicProfileHash(profileForHash);
@@ -1374,7 +1381,7 @@ router.get('/recommendations', async (req, res) => {
         }
       }
 
-      const aiQueries = await generateMusicSeedsWithDeepSeek(profile).catch(() => null);
+      const aiQueries = await generateMusicSeedsWithDeepSeek(profile as MusicTasteProfile).catch(() => null);
       const localPlus = positiveSeeds.length > 0 ? [...positiveSeeds.slice(0, 3), ...localQueries] : localQueries;
       queries = mixQueries(localPlus, aiQueries, 3);
     } else {
@@ -1726,7 +1733,7 @@ router.get('/recommendations', async (req, res) => {
     }
 
     const response: any = {
-      items: finalList,
+      items: rankRecommendationResults({ seed: rawSeed, items: finalList, profile }),
       source: usedSource,
     };
     if (isDev()) {
@@ -1807,6 +1814,31 @@ router.get('/recommendations', async (req, res) => {
       res.json(response);
     }
   }
+};
+router.get('/recommendations', recommendationsHandler);
+router.post('/radio', async (req, res) => {
+  const body = readBodyAsJson(req);
+  const currentTrack = (body as any)?.currentTrack || null;
+  const queue = Array.isArray((body as any)?.queue) ? (body as any)?.queue : [];
+  const exclude = Array.isArray((body as any)?.exclude) ? (body as any)?.exclude : [];
+
+  const title = String(currentTrack?.title || '').trim();
+  const artist = String(currentTrack?.artist || currentTrack?.uploader || '').trim();
+  const seed = artist && title ? `${artist} ${title}` : title || artist;
+
+  const excludedIds = new Set<string>();
+  for (const it of [...queue, ...exclude]) {
+    const id = String(it?.youtube_id || it?.sourceId || it?.id || '').trim();
+    if (id) excludedIds.add(id);
+  }
+
+  (req as any).query = {
+    ...(req as any).query,
+    seed,
+    exclude: Array.from(excludedIds).slice(0, 200).join(','),
+    mode: 'radio',
+  };
+  return recommendationsHandler(req as any, res as any);
 });
 router.get('/lyrics', async (req, res) => {
   const title = req.query.title as string;
@@ -1862,145 +1894,237 @@ router.get('/worker-health', async (_req, res) => {
 
 // ── Search: busca en Downloads (datos reales de la DB) y en YouTube ──
 router.get('/search', async (req, res) => {
-  const query = (req.query.q as string)?.trim();
-  if (!query) {
-    return res.status(400).json({ error: 'Query parameter "q" is required.' });
+  const reqId = makeReqId();
+  const startedAt = Date.now();
+  const rawQuery = String((req.query.q as string) || '').trim();
+  if (!rawQuery) return res.status(400).json({ error: 'Query parameter "q" is required.' });
+
+  const nq = normalizeSearchQuery(rawQuery);
+  if (!nq.normalized) return res.json({ items: [], source: 'search' });
+
+  const resultLimit = 15;
+  const words = nq.tokens.length > 0 ? nq.tokens : rawQuery.split(/\s+/).filter(Boolean);
+
+  const buildOrConditions = (fields: string[], offset: number) =>
+    words
+      .map((_, i) => `(${fields.map((f) => `${f} ILIKE $${offset + i}`).join(' OR ')})`)
+      .join(' OR ');
+
+  const localConditions = buildOrConditions(['title', "COALESCE(uploader, '')"], 1);
+  const localParams = words.map((w) => `%${w}%`);
+
+  let localRows: any[] = [];
+  try {
+    const localRes = await pool.query(
+      `
+        SELECT id, title, uploader, duration, thumbnail, url, youtube_id, mode, created_at
+        FROM Downloads
+        WHERE ${localConditions || '1=1'}
+        ORDER BY created_at DESC
+        LIMIT 80
+      `,
+      localParams
+    );
+    localRows = localRes.rows || [];
+  } catch {
+    localRows = [];
   }
 
+  const localResults = localRows.map((row) => ({
+    ...row,
+    artist: row.uploader,
+    duration_seconds: row.duration,
+    thumbnail_url: row.thumbnail,
+    source: 'local',
+  }));
+
+  const localKeys = new Set(localResults.map((loc: any) => `${normalizeSearchText(loc.title)}::${normalizeSearchText(loc.artist)}`));
+  const localYoutubeIds = new Set(localResults.map((loc: any) => loc.youtube_id).filter(Boolean));
+
+  let catalogResults: any[] = [];
   try {
-    const words = query.split(/\s+/).filter(Boolean);
-    
-    // 1. Buscar en BD local de forma MUY flexible
-    // Usamos OR en lugar de AND para que no tenga que coincidir todo exactamente
-    // Usamos ILIKE para que sea insensible a mayúsculas/minúsculas sin depender de unaccent
-    const conditions = words.map((_, i) => `(title ILIKE $${i + 1} OR COALESCE(uploader, '') ILIKE $${i + 1})`).join(' OR ');
-    const params = words.map(w => `%${w}%`);
-
-    const localResult = await pool.query(
-          `SELECT id, title, uploader, duration, thumbnail, url, youtube_id, mode, created_at FROM Downloads 
-           WHERE ${conditions || '1=1'}
-           ORDER BY created_at DESC
-           LIMIT 15`,
-          params
-        );
-
-    const localResultsRaw = localResult.rows.map(row => ({
-      ...row,
-      artist: row.uploader,
-      duration_seconds: row.duration,
-      thumbnail_url: row.thumbnail,
-      source: 'local',
+    const catConditions = buildOrConditions(['title', "COALESCE(uploader, '')"], 1);
+    const catParams = words.map((w) => `%${w}%`);
+    const catRes = await pool.query(
+      `
+        SELECT youtube_id, title, uploader, duration, thumbnail, url, score
+        FROM GlobalCatalogTracks
+        WHERE ${catConditions || '1=1'}
+        ORDER BY score DESC, updated_at DESC
+        LIMIT 60
+      `,
+      catParams
+    );
+    catalogResults = (catRes.rows || []).map((r: any) => ({
+      id: r.youtube_id,
+      youtube_id: r.youtube_id,
+      title: r.title,
+      uploader: r.uploader || 'Internet',
+      artist: r.uploader || 'Internet',
+      duration_seconds: r.duration || 0,
+      thumbnail_url: r.thumbnail || (r.youtube_id ? `https://i.ytimg.com/vi/${r.youtube_id}/hqdefault.jpg` : null),
+      url: r.url || (r.youtube_id ? `https://www.youtube.com/watch?v=${r.youtube_id}` : null),
+      source: 'youtube',
     }));
-    const localResults = await Promise.all(
-      localResultsRaw.map(async (r: any) => {
-        try {
-          return await withTimeout(healDownloadRow(r), 3500);
-        } catch {
-          void healDownloadRow(r).catch(() => {});
-          return r;
-        }
-      })
-    );
-    const localKeys = new Set(
-      localResults.map((loc: any) => `${normalizeText(loc.title)}::${normalizeText(loc.artist)}`)
-    );
-    const localYoutubeIds = new Set(
-      localResults
-        .map((loc: any) => loc.youtube_id)
-        .filter(Boolean)
-    );
+  } catch {
+    catalogResults = [];
+  }
 
-    let ytResults: any[] = [];
-    
-    // 2. Buscar en YouTube usando el query (limitamos a 40 para tener más variedad)
-    try {
-      for (const pyUrl of downloaderUrls) {
-        try {
-          console.log('[convert/search]', { reqId: 'search', url: pyUrl, timeoutMs: convertTimeoutMs, q: truncate(query, 90) });
-          const response = await axios.get(`${pyUrl}/search`, {
-            timeout: convertTimeoutMs,
-            params: { q: query, limit: 40 },
-          });
-          const data = response.data;
-          if (Array.isArray(data)) {
-            ytResults = adaptYouTubeRows(data, localKeys, localYoutubeIds);
-            if (ytResults.length > 0) break;
-          }
-        } catch {
-          continue;
-        }
-      }
-    } catch {}
+  for (const it of catalogResults) {
+    localKeys.add(`${normalizeSearchText(it.title)}::${normalizeSearchText(it.artist)}`);
+    if (it.youtube_id) localYoutubeIds.add(String(it.youtube_id));
+  }
 
-    if (ytResults.length === 0) {
-      const health = await workerHealth();
-      if (health.ok) {
-        const workerRes = await searchWithWorker(query, 40);
-        if (workerRes?.items?.length) {
-          const workerRows = workerRes.items.map((t: any) => {
-            const sid = String(t?.sourceId ?? '').trim() || String(t?.id ?? '').replace(/^youtube:/, '').trim();
-            const safeId = sid || extractYoutubeId(t?.url);
-            const ytUrl = t?.url || (safeId ? `https://www.youtube.com/watch?v=${safeId}` : '');
-            return {
-              id: safeId,
-              youtube_id: safeId,
-              title: t?.title ?? '',
-              uploader: t?.artist ?? t?.uploader ?? t?.author ?? 'Internet',
-              duration_seconds: t?.duration ?? t?.duration_seconds ?? null,
-              thumbnail_url: t?.coverUrl ?? t?.thumbnail_url ?? null,
-              url: ytUrl,
-            };
-          });
-          ytResults = adaptYouTubeRows(workerRows, localKeys, localYoutubeIds);
-        }
-      } else if (isWorkerEnabled()) {
-        console.warn('[worker/search] skipped (unhealthy)', { reqId: 'search', status: health.status });
-      }
-    }
-
-    // Fallback a DuckDuckGo si Convert+worker fallan
-    if (ytResults.length === 0) {
-      const duckRows = await searchDuckDuckGoForYoutube(query, 30);
-      ytResults = adaptYouTubeRows(duckRows, localKeys, localYoutubeIds);
-    }
-
-    // Retornamos ambos combinados (Locales primero)
-    res.json([...localResults, ...ytResults]);
-  } catch (error) {
-    console.error(error);
-    try {
-      const duckRows = await searchDuckDuckGoForYoutube(query, 30);
-      const ytResults = adaptYouTubeRows(duckRows, new Set(), new Set());
-      res.json(ytResults);
-    } catch {
+  const searchViaConvertOrWorker = async (q: string) => {
+    for (const pyUrl of downloaderUrls) {
       try {
-        const health = await workerHealth();
-        if (health.ok) {
-          const workerRes = await searchWithWorker(query, 30);
-          if (workerRes?.items?.length) {
-            const workerRows = workerRes.items.map((t: any) => {
-              const sid = String(t?.sourceId ?? '').trim() || String(t?.id ?? '').replace(/^youtube:/, '').trim();
-              const safeId = sid || extractYoutubeId(t?.url);
-              const ytUrl = t?.url || (safeId ? `https://www.youtube.com/watch?v=${safeId}` : '');
-              return {
-                id: safeId,
-                youtube_id: safeId,
-                title: t?.title ?? '',
-                uploader: t?.artist ?? t?.uploader ?? t?.author ?? 'Internet',
-                duration_seconds: t?.duration ?? t?.duration_seconds ?? null,
-                thumbnail_url: t?.coverUrl ?? t?.thumbnail_url ?? null,
-                url: ytUrl,
-              };
-            });
-            const ytResults = adaptYouTubeRows(workerRows, new Set(), new Set());
-            return res.json(ytResults);
-          }
-        } else if (isWorkerEnabled()) {
-          console.warn('[worker/search] skipped (unhealthy)', { reqId: 'search', status: health.status });
+        console.log('[convert/search]', { reqId, url: pyUrl, timeoutMs: convertTimeoutMs, q: truncate(q, 90), limit: resultLimit });
+        const response = await axios.get(`${pyUrl}/search`, {
+          timeout: convertTimeoutMs,
+          params: { q, limit: resultLimit },
+        });
+        const data = response.data;
+        if (Array.isArray(data) && data.length > 0) {
+          const items = adaptYouTubeRows(data, localKeys, localYoutubeIds);
+          if (items.length > 0) return { items, provider: 'convert' as const };
         }
       } catch {}
-      res.json([]);
     }
+
+    const health = await workerHealth().catch(() => ({ ok: false, status: 0 } as any));
+    if (health.ok) {
+      const workerRes = await searchWithWorker(q, resultLimit).catch(() => null);
+      if (workerRes?.items?.length) {
+        const workerRows = workerRes.items.map((t: any) => {
+          const sid = String(t?.sourceId ?? '').trim() || String(t?.id ?? '').replace(/^youtube:/, '').trim();
+          const safeId = sid || extractYoutubeId(t?.url);
+          const ytUrl = t?.url || (safeId ? `https://www.youtube.com/watch?v=${safeId}` : '');
+          return {
+            id: safeId,
+            youtube_id: safeId,
+            title: t?.title ?? '',
+            uploader: t?.artist ?? t?.uploader ?? t?.author ?? 'Internet',
+            duration_seconds: t?.duration ?? t?.duration_seconds ?? null,
+            thumbnail_url: t?.coverUrl ?? t?.thumbnail_url ?? null,
+            url: ytUrl,
+          };
+        });
+        const items = adaptYouTubeRows(workerRows, localKeys, localYoutubeIds);
+        if (items.length > 0) return { items, provider: 'worker' as const };
+      }
+    } else if (isWorkerEnabled()) {
+      console.warn('[worker/search] skipped (unhealthy)', { reqId, status: health.status });
+    }
+
+    return { items: [] as any[], provider: 'none' as const };
+  };
+
+  const queryVariants: string[] = [rawQuery];
+  const seenQ = new Set<string>([normalizeSearchText(rawQuery)]);
+  const pushQuery = (q: string) => {
+    const k = normalizeSearchText(q);
+    if (!k || seenQ.has(k)) return;
+    seenQ.add(k);
+    queryVariants.push(q);
+  };
+
+  let ytResults: any[] = [];
+  let sources = { convert: 0, worker: 0, duck: 0, catalog: catalogResults.length, local: localResults.length };
+
+  try {
+    const primary = await searchViaConvertOrWorker(rawQuery);
+    ytResults.push(...primary.items);
+    if (primary.provider === 'convert') sources.convert += primary.items.length;
+    if (primary.provider === 'worker') sources.worker += primary.items.length;
+
+    const combined0 = [...localResults, ...catalogResults, ...ytResults];
+    let ranked0 = rankSearchResults(rawQuery, combined0);
+
+    if (ranked0.afterRank < 8) {
+      const tokenMap = new Map<string, string>();
+      const topTitles = ranked0.topScores.map((t) => String(t.title || '')).slice(0, 6);
+      for (const token of nq.tokens) {
+        if (token.length < 3) continue;
+        if (tokenMap.has(token)) continue;
+        for (const tt of topTitles) {
+          const tnorm = normalizeSearchText(tt);
+          for (const w of tnorm.split(' ').filter(Boolean)) {
+            if (w.length >= token.length + 2 && w.startsWith(token)) {
+              tokenMap.set(token, w);
+              break;
+            }
+          }
+          if (tokenMap.has(token)) break;
+        }
+      }
+
+      let replaced = nq.normalized;
+      for (const [k, v] of tokenMap.entries()) {
+        replaced = replaced.replace(new RegExp(`\\b${k}\\b`, 'g'), v);
+      }
+      if (replaced && replaced !== nq.normalized) pushQuery(replaced);
+
+      const topArtist = normalizeSearchText(ranked0.topScores?.[0]?.artist || '');
+      if (topArtist && !nq.normalized.includes(topArtist) && topArtist.length <= 40) pushQuery(`${topArtist} ${nq.normalized}`);
+
+      for (const q2 of queryVariants.slice(1, 3)) {
+        const res2 = await searchViaConvertOrWorker(q2);
+        ytResults.push(...res2.items);
+        if (res2.provider === 'convert') sources.convert += res2.items.length;
+        if (res2.provider === 'worker') sources.worker += res2.items.length;
+      }
+
+      ranked0 = rankSearchResults(rawQuery, [...localResults, ...catalogResults, ...ytResults]);
+    }
+
+    if (ranked0.afterRank < 8) {
+      const aiQueries = await getSearchQueryAlternatives(rawQuery);
+      if (aiQueries && aiQueries.length > 0) {
+        for (const q3 of aiQueries) pushQuery(q3);
+        for (const q3 of aiQueries) {
+          const res3 = await searchViaConvertOrWorker(q3);
+          ytResults.push(...res3.items);
+          if (res3.provider === 'convert') sources.convert += res3.items.length;
+          if (res3.provider === 'worker') sources.worker += res3.items.length;
+        }
+        ranked0 = rankSearchResults(rawQuery, [...localResults, ...catalogResults, ...ytResults]);
+      }
+    }
+
+    if (ytResults.length === 0) {
+      const duckRows = await searchDuckDuckGoForYoutube(rawQuery, resultLimit);
+      const duck = adaptYouTubeRows(duckRows, localKeys, localYoutubeIds);
+      ytResults.push(...duck);
+      sources.duck += duck.length;
+    }
+
+    const combined = [...localResults, ...catalogResults, ...ytResults];
+    const ranked = rankSearchResults(rawQuery, combined);
+
+    console.log('[search]', { reqId, q: truncate(rawQuery, 90), normalized: truncate(ranked.query.normalized, 90) });
+    console.log('[search] sources', { reqId, ...sources, variants: queryVariants.length });
+    console.log('[search] ranked', { reqId, before: ranked.beforeRank, after: ranked.afterRank });
+    console.log('[search] topResults', ranked.topScores.slice(0, 6));
+
+    const response: any = { items: ranked.items, source: 'search' };
+    if (isDev()) {
+      response.debug = {
+        query: rawQuery,
+        normalizedQuery: ranked.query.normalized,
+        beforeRank: ranked.beforeRank,
+        afterRank: ranked.afterRank,
+        sources,
+        queriesUsed: queryVariants.slice(0, 6),
+        topScores: ranked.topScores.slice(0, 10),
+        ms: Date.now() - startedAt,
+      };
+    }
+    return res.json(response);
+  } catch (error) {
+    console.error('[search] error', { reqId, error: serializeError(error) });
+    const response: any = { items: [], source: 'search' };
+    if (isDev()) response.debug = { query: rawQuery, normalizedQuery: nq.normalized, error: serializeError(error), ms: Date.now() - startedAt };
+    return res.json(response);
   }
 });
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { MusicProvider } from './context/MusicContext';
 import { PlaybackProvider } from './context/PlaybackContext';
+import { HomeDataProvider } from './context/HomeDataContext';
 import { Login } from './components/Login';
 import { LoadingScreen } from './components/LoadingScreen';
 import { API_BASE } from './api';
@@ -50,9 +51,10 @@ export default function App() {
   return (
     <MusicProvider>
       <PlaybackProvider user={user}>
-        <AppShell user={user} onLogout={() => signOut(auth)} onProfileUpdate={setUser} />
+        <HomeDataProvider user={user}>
+          <AppShell user={user} onLogout={() => signOut(auth)} onProfileUpdate={setUser} />
+        </HomeDataProvider>
       </PlaybackProvider>
     </MusicProvider>
   );
 }
-
