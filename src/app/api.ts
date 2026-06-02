@@ -1,8 +1,18 @@
 import { auth } from '../firebaseConfig';
 
+const normalizeApiBase = (raw: string) => {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed;
+};
+
+const rawApiBase = String(import.meta.env.VITE_API_BASE ?? '');
 export const API_BASE =
-  import.meta.env.VITE_API_BASE ??
-  (import.meta.env.PROD ? 'https://api.vibenosekai.art' : '');
+  import.meta.env.PROD ? '' : normalizeApiBase(rawApiBase);
+
+if (import.meta.env.DEV) {
+  console.debug('[api-base]', API_BASE || 'relative');
+}
 
 export const apiFetch = async (path: string, init: RequestInit = {}) => {
   const token = await auth.currentUser?.getIdToken();

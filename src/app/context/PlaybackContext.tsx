@@ -482,7 +482,12 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
 
     const resolvedUrl = resolveMediaUrl(song.file_url);
     if (import.meta.env.DEV) console.debug('[playback/audioUrl]', resolvedUrl);
-    if (resolvedUrl.includes('://convert:8000') || resolvedUrl.includes('http://convert:8000') || resolvedUrl.includes('https://convert:8000')) {
+    let isInternalConvert = false;
+    try {
+      const u = new URL(resolvedUrl);
+      if (u.hostname === 'convert') isInternalConvert = true;
+    } catch {}
+    if (isInternalConvert) {
       setPlaybackError('El audio no es accesible desde el navegador. Intenta nuevamente.');
       return;
     }
