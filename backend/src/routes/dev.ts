@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import axios from 'axios';
 import pool from '../db';
 import { generateLocalMusicQueries, generateMusicSeedsWithDeepSeek, mixQueries, type MusicTasteProfile } from '../services/deepseekRecommendations';
+import { isWorkerEnabled, workerHealth } from '../services/mediaWorkerClient';
 
 const router = Router();
 
@@ -105,6 +106,16 @@ router.post('/recommendation-seeds', async (req: Request, res: Response) => {
   const finalQueries = mixQueries(localQueries, aiQueries, 12);
 
   return res.json({ localQueries, aiQueries, finalQueries });
+});
+
+router.get('/worker-health', async (_req: Request, res: Response) => {
+  if (isProd()) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const enabled = isWorkerEnabled();
+  const url = process.env.MEDIA_WORKER_URL || null;
+  const health = await workerHealth();
+  return res.json({ enabled, url, ok: health.ok });
 });
 
 export default router;

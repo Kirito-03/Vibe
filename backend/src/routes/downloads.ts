@@ -61,6 +61,137 @@ const extractYoutubeId = (url: string): string | null => {
   return null;
 };
 
+const isHttpUrl = (v: unknown) => typeof v === 'string' && /^https?:\/\//i.test(v);
+
+const inferExt = (filename: unknown, fallback = '.mp3') => {
+  if (typeof filename !== 'string') return fallback;
+  const ext = path.extname(filename).toLowerCase();
+  if (!ext) return fallback;
+  if (ext.length > 10) return fallback;
+  return ext;
+};
+
+const safeBaseName = (name: unknown, fallback: string) => {
+  const base = typeof name === 'string' ? path.basename(name) : '';
+  const cleaned = base.replace(/[^\w.\-()+\[\] ]+/g, '').trim();
+  return cleaned || fallback;
+};
+
+const convertFailureReason = (error: any): { shouldFallback: boolean; reason: string } => {
+  const status = Number(error?.response?.status || 0);
+  const msg = String(error?.message || '');
+  const detail = String(error?.response?.data?.detail || error?.response?.data?.error || '');
+  const text = `${msg}\n${detail}`.toLowerCase();
+
+  const isTimeout =
+    String(error?.code || '').toLowerCase() === 'econnaborted' ||
+    /timeout/i.test(msg) ||
+    /timeout/i.test(detail);
+
+  const blocked =
+    status === 401 ||
+    status === 403 ||
+    text.includes("sign in to confirm you're not a bot") ||
+    text.includes('requiere autenticación') ||
+    text.includes('cookies') ||
+    text.includes('not a bot');
+
+  if (isTimeout) return { shouldFallback: true, reason: 'timeout' };
+  if (blocked) return { shouldFallback: true, reason: `blocked:${status || 'unknown'}` };
+  return { shouldFallback: false, reason: status ? `http:${status}` : 'error' };
+};
+
+const normalizeWorkerDownload = (data: any) => {
+  const ok = data?.ok === true || data?.success === true || !!(data?.url || data?.audioUrl || data?.file_url);
+  const fileUrl = data?.url || data?.audioUrl || data?.file_url || null;
+  const filename = data?.filename || data?.name || null;
+  return { ok, fileUrl, filename, raw: data };
+};
+
+const allowedRemoteHosts = () => {
+  let workerHost = '';
+  try {
+    workerHost = process.env.MEDIA_WORKER_URL ? new URL(process.env.MEDIA_WORKER_URL).hostname : '';
+  } catch {}
+  return [
+    'googlevideo.com',
+    'youtube.com',
+    'youtu.be',
+    'soundcloud.com',
+    'sndcdn.com',
+    workerHost,
+  ].filter(Boolean);
+};
+
+const isAllowedRemoteUrl = (rawUrl: string) => {
+  try {
+    const u = new URL(rawUrl);
+    if (!['http:', 'https:'].includes(u.protocol)) return false;
+    const allow = allowedRemoteHosts();
+    return allow.some((h) => u.hostname.endsWith(h));
+  } catch {
+    return false;
+  }
+};
+
+const pipeRemoteToResponse = async (remoteUrl: string, req: Request, res: Response) => {
+  if (!isAllowedRemoteUrl(remoteUrl)) {
+    return res.status(403).json({ error: 'Forbidden: redirect host no autorizado' });
+  }
+
+  const headers: Record<string, string> = {};
+  const range = req.headers.range;
+  if (typeof range === 'string' && range.trim()) headers.Range = range;
+
+  const upstream = await axios.get(remoteUrl, {
+    responseType: 'stream',
+    timeout: 60_000,
+    headers,
+    validateStatus: () => true,
+  });
+
+  const status = upstream.status || 502;
+  const passHeaders = ['content-type', 'content-length', 'content-range', 'accept-ranges'];
+  for (const h of passHeaders) {
+    const v = upstream.headers?.[h];
+    if (typeof v === 'string' && v) res.setHeader(h, v);
+  }
+  res.status(status);
+  upstream.data.pipe(res);
+};
+
+const downloadRemoteToLocal = async (remoteUrl: string, destPath: string) => {
+  if (!isAllowedRemoteUrl(remoteUrl)) return null;
+  const dir = path.dirname(destPath);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const tmpPath = `${destPath}.tmp-${Date.now()}`;
+  const writer = fs.createWriteStream(tmpPath);
+  try {
+    const upstream = await axios.get(remoteUrl, {
+      responseType: 'stream',
+      timeout: 120_000,
+      validateStatus: () => true,
+    });
+    if (upstream.status < 200 || upstream.status >= 300) {
+      try { writer.close(); } catch {}
+      try { fs.unlinkSync(tmpPath); } catch {}
+      return null;
+    }
+    await new Promise<void>((resolve, reject) => {
+      upstream.data.pipe(writer);
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
+    fs.renameSync(tmpPath, destPath);
+    return destPath;
+  } catch {
+    try { writer.close(); } catch {}
+    try { fs.unlinkSync(tmpPath); } catch {}
+    return null;
+  }
+};
+
 const toApiDownload = (row: any) => {
   if (!row) return row;
   return {
@@ -131,15 +262,30 @@ router.post('/', async (req: Request, res: Response) => {
       );
       dlData = pyRes.data;
     } catch (error: any) {
-      console.error('[downloads] python download error:', error?.response?.data || error.message);
-      if (isWorkerEnabled()) {
+      const failure = convertFailureReason(error);
+      console.warn('[downloads] convert failed', { reason: failure.reason, status: error?.response?.status });
+
+      if (failure.shouldFallback && isWorkerEnabled()) {
+        console.log('[worker/download] fallback=true', { url });
         const workerData = await downloadWithWorker(url);
-        const workerPath = workerData?.file_path || workerData?.filePath || workerData?.url || workerData?.audioUrl || null;
-        if (workerData && workerPath) {
-          dlData = { ...workerData, file_path: workerPath };
-          console.log('[downloads] worker download fallback ok');
-        } else if (workerData) {
-          console.warn('[downloads] worker download fallback missing file_path/url');
+        const norm = normalizeWorkerDownload(workerData);
+        if (norm.ok && isHttpUrl(norm.fileUrl)) {
+          const ext = inferExt(norm.filename, mode === 'video' ? '.mp4' : '.mp3');
+          const baseName = extractedYoutubeId ? `${extractedYoutubeId}${ext}` : safeBaseName(norm.filename, `worker-${Date.now()}${ext}`);
+          const localPath = path.join(MEDIA_BASE_DIR, mode === 'video' ? 'video' : 'audio', baseName);
+          const stored = await downloadRemoteToLocal(String(norm.fileUrl), localPath);
+          if (stored) {
+            dlData = {
+              ...workerData,
+              filename: path.basename(stored),
+              file_path: stored,
+            };
+            console.log('[worker/download] ok', { stored: path.basename(stored) });
+          } else {
+            console.warn('[worker/download] failed', { reason: 'download_remote_failed' });
+          }
+        } else {
+          console.warn('[worker/download] failed', { reason: 'empty_response' });
         }
       }
       if (!dlData) throw error;
@@ -277,9 +423,20 @@ router.get('/stream-direct', async (req: Request, res: Response) => {
     // Python /stream-url already does this and returns { url: "https://rr*.googlevideo.com/..." }
     const pyRes = await axios.get(`${DOWNLOADER_URL}/stream-url?url=${encodeURIComponent(url)}`, {
       timeout: 130000,
+      validateStatus: () => true,
     });
-    const directUrl = pyRes.data?.url;
+    const directUrl = pyRes.status >= 200 && pyRes.status < 300 ? pyRes.data?.url : null;
     if (!directUrl) {
+      if (isWorkerEnabled()) {
+        console.warn('[downloads] stream-direct convert failed', { status: pyRes.status });
+        const extracted = await extractWithWorker(url);
+        const workerUrl = extracted?.audioUrl;
+        if (workerUrl && isHttpUrl(workerUrl)) {
+          console.log('[worker/extract] ok', { fallback: true });
+          return await pipeRemoteToResponse(String(workerUrl), req, res);
+        }
+        console.warn('[worker/extract] failed', { fallback: true });
+      }
       return res.status(502).json({ error: 'No se pudo obtener URL directa' });
     }
     // 302 redirect: browser connects directly to Google CDN (seekable, Range-capable)
@@ -288,12 +445,12 @@ router.get('/stream-direct', async (req: Request, res: Response) => {
     console.error('[downloads] stream-direct error:', error?.response?.data || error.message);
     if (isWorkerEnabled()) {
       const extracted = await extractWithWorker(url);
-      const directUrl = extracted?.audioUrl;
-      if (directUrl) {
-        console.log('[downloads] stream-direct worker fallback ok');
-        return res.redirect(302, directUrl);
+      const workerUrl = extracted?.audioUrl;
+      if (workerUrl && isHttpUrl(workerUrl)) {
+        console.log('[worker/extract] ok', { fallback: true });
+        return await pipeRemoteToResponse(String(workerUrl), req, res);
       }
-      console.warn('[downloads] stream-direct worker fallback empty');
+      console.warn('[worker/extract] failed', { fallback: true });
     }
     return res.status(500).json({ error: 'Error al obtener stream' });
   }
@@ -353,6 +510,9 @@ router.get('/stream/:id', async (req: Request, res: Response) => {
         ].filter(Boolean);
         if (!allowedHosts.some((h) => parsed.hostname.endsWith(h))) {
           return res.status(403).json({ error: 'Forbidden: redirect host no autorizado' });
+        }
+        if (workerHost && parsed.hostname.endsWith(workerHost)) {
+          return await pipeRemoteToResponse(filePath, req, res);
         }
         return res.redirect(302, filePath);
       } catch {

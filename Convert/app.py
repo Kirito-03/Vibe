@@ -83,13 +83,11 @@ def _cache_set(key: str, data):
 
 @app.on_event("startup")
 def _startup_diagnostics():
-    cookies_src = _detect_cookie_source_path()
+    cookies_src = _cookies_configured_path()
     logger.info(
         "startup diagnostics",
         extra={
-            "cookiesPath": str(cookies_src) if cookies_src else None,
-            "cookiesExists": bool(cookies_src),
-            "cookiesSize": (cookies_src.stat().st_size if cookies_src else 0),
+            **_cookies_diagnostics(cookies_src),
             "proxySet": bool(os.getenv("YTDLP_PROXY")),
             "cookiesEnv": bool(os.getenv("YTDLP_COOKIES_PATH")),
         },
@@ -169,6 +167,13 @@ def _audio_bitrate_from_quality(q: str) -> str:
     return {"high": "320", "medium": "192", "low": "128"}.get(q, "192")
 
 
+def _cookies_configured_path() -> Path:
+    env_path = os.getenv("YTDLP_COOKIES_PATH")
+    if env_path:
+        return Path(env_path)
+    return Path("/app/cookies.txt")
+
+
 def _detect_cookie_source_path() -> Optional[Path]:
     env_path = os.getenv("YTDLP_COOKIES_PATH")
     candidates: list[Path] = []
@@ -177,32 +182,74 @@ def _detect_cookie_source_path() -> Optional[Path]:
     candidates.append(Path("/app/cookies.txt"))
     for p in candidates:
         try:
-            if p.exists() and p.stat().st_size > 0:
+            if p.exists() and p.is_file() and p.stat().st_size > 0:
                 return p
         except Exception:
             continue
     try:
         for p in sorted(Path("/app").glob("cookies*.txt")):
-            if p.exists() and p.stat().st_size > 0:
+            if p.exists() and p.is_file() and p.stat().st_size > 0:
                 return p
     except Exception:
         pass
     return None
 
 
-def _prepare_cookies_tmp() -> Optional[Path]:
-    src = _detect_cookie_source_path()
-    if not src:
-        return None
-    tmp_cookies = Path("/tmp/yt_cookies.txt")
+def _cookies_diagnostics(path: Optional[Path]) -> dict:
+    diag = {
+        "cookiesPath": str(path) if path else None,
+        "cookiesExists": False,
+        "cookiesIsFile": False,
+        "cookiesIsDir": False,
+        "cookiesSize": 0,
+        "cookiesHasNetscapeHeader": False,
+    }
+    if not path:
+        return diag
     try:
+        diag["cookiesExists"] = path.exists()
+        diag["cookiesIsFile"] = path.is_file()
+        diag["cookiesIsDir"] = path.is_dir()
+        if diag["cookiesExists"] and diag["cookiesIsFile"]:
+            diag["cookiesSize"] = int(path.stat().st_size)
+            if diag["cookiesSize"] > 0:
+                with path.open("rb") as f:
+                    head = f.read(160)
+                diag["cookiesHasNetscapeHeader"] = b"Netscape HTTP Cookie File" in head
+    except Exception:
+        return diag
+    return diag
+
+
+def _prepare_cookies_tmp(dest_dir: Optional[Path] = None) -> Optional[Path]:
+    src = _cookies_configured_path()
+    diag = _cookies_diagnostics(src)
+    is_valid = bool(diag.get("cookiesExists")) and bool(diag.get("cookiesIsFile")) and int(diag.get("cookiesSize") or 0) > 0
+    if not is_valid:
+        logger.warning(
+            "[cookies] disabled: invalid cookies file",
+            extra={**diag, "cookiesAttached": False},
+        )
+        return None
+
+    tmp_root = dest_dir if dest_dir else Path(tempfile.gettempdir())
+    try:
+        tmp_root.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(prefix="yt_cookies_", suffix=".txt", dir=str(tmp_root))
+        os.close(fd)
+        tmp_cookies = Path(tmp_path)
         shutil.copy2(str(src), str(tmp_cookies))
+        logger.info(f"[cookies] enabled path={diag.get('cookiesPath')}", extra={**diag, "cookiesAttached": True})
         return tmp_cookies
     except Exception:
+        logger.warning(
+            "[cookies] disabled: invalid cookies file",
+            extra={**diag, "cookiesAttached": False},
+        )
         return None
 
 
-def _yt_dlp_base_args() -> list:
+def _yt_dlp_base_args(tmp_cookies: Optional[Path] = None, player_client: str = "web") -> list:
     """
     Common yt-dlp args used across all endpoints.
     - Copies cookies.txt to /tmp so yt-dlp can write without hitting read-only FS.
@@ -220,12 +267,11 @@ def _yt_dlp_base_args() -> list:
         "--retry-sleep", "1:10",
         "--js-runtimes", "node:/usr/bin/node",
         "--remote-components", "ejs:github",
-        "--extractor-args", "youtube:player_client=web",
+        "--extractor-args", f"youtube:player_client={player_client}",
     ]
     proxy = os.getenv("YTDLP_PROXY")
     if proxy:
         args += ["--proxy", proxy]
-    tmp_cookies = _prepare_cookies_tmp()
     if tmp_cookies:
         args += ["--cookies", str(tmp_cookies)]
     return args
@@ -297,7 +343,7 @@ def _extract_youtube_id(url: str) -> Optional[str]:
 # -------------------- CORE DOWNLOAD --------------------
 def _do_download(url: str, mode: str, quality: str) -> DownloadResponse:
     url = clean_url(url)
-    logger.info(f"Downloading {url} mode={mode} quality={quality}")
+    logger.info("[convert/download] start", extra={"url": url, "mode": mode, "quality": quality})
 
     storage_base = _get_storage_base_dir()
     youtube_id = _extract_youtube_id(url)
@@ -313,16 +359,16 @@ def _do_download(url: str, mode: str, quality: str) -> DownloadResponse:
 
     temp_dir = Path(tempfile.mkdtemp())
     try:
-        cookie_path = _detect_cookie_source_path()
-        cookie_available = bool(cookie_path)
+        cookies_src = _cookies_configured_path()
+        cookies_tmp = _prepare_cookies_tmp(temp_dir)
+        cookie_diag = _cookies_diagnostics(cookies_src)
         ffmpeg_loc = _resolve_ffmpeg_location()
         logger.info(
-            "yt-dlp cookies diagnostic",
+            "[convert/download] diagnostics",
             extra={
-                "cookiesPath": str(cookie_path) if cookie_path else None,
-                "cookiesExists": bool(cookie_path),
-                "cookiesSize": (cookie_path.stat().st_size if cookie_path else 0),
+                **cookie_diag,
                 "proxySet": bool(os.getenv("YTDLP_PROXY")),
+                "cookiesAttached": bool(cookies_tmp),
                 "mode": mode,
             },
         )
@@ -330,79 +376,52 @@ def _do_download(url: str, mode: str, quality: str) -> DownloadResponse:
         last_err: Optional[str] = None
         info: dict = {}
 
-        attempt_sets = [False, True] if cookie_available else [False]
-        for use_cookies in attempt_sets:
-            cookie_tmp: Optional[Path] = None
-            if use_cookies:
-                cookie_tmp = temp_dir / "cookies.txt"
-                shutil.copyfile(cookie_path, cookie_tmp)  # type: ignore[arg-type]
+        client_attempts = ["web"] if cookies_tmp else ["android,web,ios", "android", "web", "ios"]
+        for client_arg in client_attempts:
+            base_args = _yt_dlp_base_args(cookies_tmp, player_client=client_arg)
+            base_cmd = [
+                "yt-dlp",
+                *base_args,
+                "--quiet",
+                "-o",
+                str(temp_dir / "%(id)s.%(ext)s"),
+            ]
+            if ffmpeg_loc:
+                base_cmd.extend(["--ffmpeg-location", ffmpeg_loc])
 
-            client_attempts = ["android,web,ios", "android", "web", "ios"] if not use_cookies else ["web"]
-            for client_arg in client_attempts:
-                # LA HOJA DEL VERDUGO: IGNORANDO ESCUDOS SSL
-                base_cmd = [
-                    "yt-dlp",
-                    "--no-check-certificate",  # <--- INYECTADO: Obliga a ignorar SSL
-                    "--no-playlist",
-                    "--no-warnings",
-                    "--quiet",
-                    "--force-ipv4",
-                    "--retries", "10",
-                    "--fragment-retries", "10",
-                    "--socket-timeout", "20",
-                    "--retry-sleep", "1:10",
-                    "--js-runtimes",
-                    "node:/usr/bin/node",
-                    "--extractor-args",
-                    f"youtube:player_client={client_arg}",
-                    "-o",
-                    str(temp_dir / "%(id)s.%(ext)s"),
-                ]
-                proxy = os.getenv("YTDLP_PROXY")
-                if proxy:
-                    base_cmd.extend(["--proxy", proxy])
+            info_cmd = [*base_cmd, "--skip-download", "--dump-json", url]
+            info_result = subprocess.run(info_cmd, capture_output=True, text=True)
+            if info_result.returncode != 0:
+                last_err = (info_result.stderr or info_result.stdout).strip() or "yt-dlp failed"
+                continue
 
-                if use_cookies:
-                    base_cmd.extend(["--remote-components", "ejs:github"])
-
-                if ffmpeg_loc:
-                    base_cmd.extend(["--ffmpeg-location", ffmpeg_loc])
-                if cookie_tmp:
-                    base_cmd.extend(["--cookies", str(cookie_tmp)])
-
-                info_cmd = [*base_cmd, "--skip-download", "--dump-json", url]
-                info_result = subprocess.run(info_cmd, capture_output=True, text=True)
-                if info_result.returncode != 0:
-                    last_err = (info_result.stderr or info_result.stdout).strip() or "yt-dlp failed"
+            for line in reversed(info_result.stdout.splitlines()):
+                try:
+                    info = json.loads(line)
+                    break
+                except Exception:
                     continue
 
-                for line in reversed(info_result.stdout.splitlines()):
-                    try:
-                        info = json.loads(line)
-                        break
-                    except Exception:
-                        continue
+            if mode == "audio":
+                dl_cmd = [*base_cmd, *[
+                    "-f", "bestaudio/best",
+                    "--extract-audio",
+                    "--audio-format", "mp3",
+                    "--audio-quality", f"{_audio_bitrate_from_quality(quality)}K",
+                    "--no-keep-video",
+                ], url]
+            else:
+                dl_cmd = [*base_cmd, *[
+                    "-f", _video_format_from_quality(quality),
+                    "--merge-output-format", "mp4",
+                ], url]
 
-                if mode == "audio":
-                    dl_cmd = [*base_cmd, *[
-                        "-f", "bestaudio/best",
-                        "--extract-audio",
-                        "--audio-format", "mp3",
-                        "--audio-quality", f"{_audio_bitrate_from_quality(quality)}K",
-                        "--no-keep-video",
-                    ], url]
-                else:
-                    dl_cmd = [*base_cmd, *[
-                        "-f", _video_format_from_quality(quality),
-                        "--merge-output-format", "mp4",
-                    ], url]
+            dl_result = subprocess.run(dl_cmd, capture_output=True, text=True)
+            if dl_result.returncode == 0:
+                last_err = None
+                break
 
-                dl_result = subprocess.run(dl_cmd, capture_output=True, text=True)
-                if dl_result.returncode == 0:
-                    last_err = None
-                    break
-
-                last_err = (dl_result.stderr or dl_result.stdout).strip() or "yt-dlp failed"
+            last_err = (dl_result.stderr or dl_result.stdout).strip() or "yt-dlp failed"
 
             if not last_err:
                 break
@@ -415,7 +434,7 @@ def _do_download(url: str, mode: str, quality: str) -> DownloadResponse:
             raise RuntimeError("No se encontró el archivo descargado")
 
         final_path = _move_to_storage(downloaded, mode)
-        logger.info(f"Saved to {final_path}")
+        logger.info("[convert/download] stored", extra={"path": str(final_path), "mode": mode})
 
         return DownloadResponse(
             title=(info.get("title") if isinstance(info, dict) else None) or final_path.stem,
@@ -426,10 +445,10 @@ def _do_download(url: str, mode: str, quality: str) -> DownloadResponse:
             thumbnail_url=(info.get("thumbnail") if isinstance(info, dict) else None),
             uploader=((info.get("uploader") or info.get("channel")) if isinstance(info, dict) else None),
         )
-
     except Exception as e:
-        shutil.rmtree(temp_dir, ignore_errors=True)
         raise e
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 # -------------------- ROUTES --------------------
@@ -453,37 +472,37 @@ def search_youtube(q: str, limit: int = 5):
         logger.info("[convert/search] cache-hit", extra={"query": q_norm, "limit": limit, "items": len(cached)})
         return cached
 
-    cookies_src = _detect_cookie_source_path()
-    cookies_tmp = _prepare_cookies_tmp()
+    cookies_src = _cookies_configured_path()
     timeout_sec = _search_timeout_seconds()
     start = time.perf_counter()
-
-    logger.info(
-        "[convert/search] start",
-        extra={
-            "query": q_norm,
-            "limit": limit,
-            "timeoutSec": timeout_sec,
-            "cookiesPath": str(cookies_src) if cookies_src else None,
-            "cookiesExists": bool(cookies_src),
-            "cookiesAttached": bool(cookies_tmp),
-            "proxySet": bool(os.getenv("YTDLP_PROXY")),
-        },
-    )
+    cookies_tmp: Optional[Path] = None
 
     try:
-        base_args = _yt_dlp_base_args()
-        cmd = [
-            "yt-dlp",
-            *base_args,
-            "--flat-playlist",
-            "--dump-json",
-            "--skip-download",
-            f"ytsearch{limit}:{q_norm}",
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
-        if proc.returncode != 0:
-            raise RuntimeError((proc.stderr or proc.stdout).strip() or "yt-dlp failed")
+        with tempfile.TemporaryDirectory() as td:
+            cookies_tmp = _prepare_cookies_tmp(Path(td))
+            logger.info(
+                "[convert/search] start",
+                extra={
+                    "query": q_norm,
+                    "limit": limit,
+                    "timeoutSec": timeout_sec,
+                    **_cookies_diagnostics(cookies_src),
+                    "cookiesAttached": bool(cookies_tmp),
+                    "proxySet": bool(os.getenv("YTDLP_PROXY")),
+                },
+            )
+            base_args = _yt_dlp_base_args(cookies_tmp)
+            cmd = [
+                "yt-dlp",
+                *base_args,
+                "--flat-playlist",
+                "--dump-json",
+                "--skip-download",
+                f"ytsearch{limit}:{q_norm}",
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
+            if proc.returncode != 0:
+                raise RuntimeError((proc.stderr or proc.stdout).strip() or "yt-dlp failed")
 
         raw_entries = []
         for line in (proc.stdout or "").splitlines():
@@ -649,10 +668,11 @@ def search_youtube(q: str, limit: int = 5):
 def get_stream_url(url: str):
     logger.info(f"Getting stream URL for: {url}")
     base_args = _yt_dlp_base_args()
+    cookies_src = _cookies_configured_path()
     logger.info(
         "stream-url diagnostics",
         extra={
-            "cookiesPath": str(_detect_cookie_source_path()) if _detect_cookie_source_path() else None,
+            **_cookies_diagnostics(cookies_src),
             "cookiesAttached": ("--cookies" in base_args),
             "proxySet": bool(os.getenv("YTDLP_PROXY")),
         },
@@ -729,10 +749,11 @@ def pipe_audio(url: str, request: FastAPIRequest = None):
 
     # ── 2. yt-dlp --get-url → 302 redirect to Google CDN ────────
     base_args = _yt_dlp_base_args()
+    cookies_src = _cookies_configured_path()
     logger.info(
         "pipe-audio diagnostics",
         extra={
-            "cookiesPath": str(_detect_cookie_source_path()) if _detect_cookie_source_path() else None,
+            **_cookies_diagnostics(cookies_src),
             "cookiesAttached": ("--cookies" in base_args),
             "proxySet": bool(os.getenv("YTDLP_PROXY")),
         },

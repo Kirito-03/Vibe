@@ -33,11 +33,16 @@ postgres_data/
 data/
 
 cookies/
+Convert/cookies.txt
+cookies.txt
 *.cookies.txt
 *cookies*.txt
+!Convert/cookies.example.txt
 
 google-services.json
 GoogleService-Info.plist
+backend/cla2.json
+cla2.json
 
 logs/
 
