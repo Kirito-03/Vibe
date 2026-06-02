@@ -24,7 +24,6 @@ services:
     image: nginx:alpine
     container_name: vns_frontend
     restart: unless-stopped
-    profiles: ["prod"]
     expose:
       - "80"
     volumes:
@@ -134,10 +133,9 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: vns_tunnel
     restart: unless-stopped
-    profiles: ["prod"]
     command: ["tunnel", "run"]
     environment:
-      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?TUNNEL_TOKEN is required}
     depends_on:
       - frontend
       - backend

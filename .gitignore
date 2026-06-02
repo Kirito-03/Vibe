@@ -9,6 +9,8 @@ backend/dist/
 backend/.env
 backend/.env.*
 !backend/.env.example
+backend/.env.docker
+backend/.env.docker.*
 
 Convert/.env
 Convert/.env.*
