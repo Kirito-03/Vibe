@@ -115,6 +115,9 @@ export function Library({ currentSong, isPlaying, onPlaylistClick, onSongPlay, t
         file_url: fileUrl,
         image_url: data.image_url ?? undefined,
         imageUrl: data.image_url ?? undefined,
+        youtube_id: data.youtube_id ?? undefined,
+        url: data.url ?? undefined,
+        source: data.source ?? undefined,
       };
     };
 

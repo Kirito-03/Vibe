@@ -134,6 +134,8 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   const autoplayBusyRef = useRef(false);
   const playedIdsRef = useRef<Set<string>>(new Set());
   const repairAttemptsRef = useRef<Map<string, number>>(new Map());
+  const lastUserInitiatedRef = useRef(false);
+  const repairingRef = useRef(false);
   const expandingQueueRef = useRef(false);
   const bufferDoneRef = useRef(false);
 
@@ -316,8 +318,9 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     }
   };
 
-  const playSong = useCallback((song: Song, playlist?: Playlist, isCrossfade = false) => {
+  const playSongInternal = useCallback((song: Song, playlist?: Playlist, isCrossfade = false, opts?: { userInitiated?: boolean }) => {
     setPlaybackError(null);
+    lastUserInitiatedRef.current = Boolean(opts?.userInitiated);
     if (!song?.file_url) {
       setPlaybackError('No hay audio disponible para reproducir esta canción.');
       return;
@@ -466,6 +469,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     const currentUser = auth.currentUser;
     if (currentUser) {
       const key = songKeyFromId(song.id);
+      const ytUrl = song.youtube_id ? makeSafeYoutubeWatchUrl(song.youtube_id) : null;
       setDoc(doc(db, 'users', currentUser.uid, 'recents', key), {
         id: key,
         song_id: song.id,
@@ -474,6 +478,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
         duration_seconds: song.duration_seconds ?? null,
         image_url: song.image_url ?? song.imageUrl ?? null,
         file_url: toStorableFileUrl(song.file_url),
+        url: ytUrl,
         youtube_id: song.youtube_id ?? null,
         source: song.source ?? 'youtube',
         played_at: serverTimestamp(),
@@ -578,6 +583,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     audio.addEventListener('error', async () => {
       if (isRecovering || !isMyGen()) return;
       isRecovering = true;
+      repairingRef.current = true;
       setIsPlaying(false);
       setPlaybackError('No pudimos reproducir esta canción. Intentando repararla...');
 
@@ -587,45 +593,43 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
         const prevAttempts = repairAttemptsRef.current.get(repairKey) || 0;
         if (prevAttempts >= maxRepairAttemptsPerTrack) {
           setPlaybackError('No pudimos reproducir esta canción. Intenta con otra.');
-          if (settings.autoplay) next();
+          if (!lastUserInitiatedRef.current && settings.autoplay) next();
           return;
         }
         repairAttemptsRef.current.set(repairKey, prevAttempts + 1);
-
-        let ytId = song.youtube_id;
-        let downloadUrl = ytId ? makeSafeYoutubeWatchUrl(ytId) : '';
-        let uploader = song.artist || 'Desconocido';
-
-        if (!ytId) {
-          const query = `${song.title} ${song.artist !== 'Internet' && song.artist !== 'Desconocido' ? song.artist : ''}`.trim();
-          const searchRes = await apiFetch(`/api/music/search?q=${encodeURIComponent(query)}&limit=1`);
-          if (searchRes.ok) {
-            const searchData = await searchRes.json();
-            if (searchData?.[0]?.url) {
-              ytId = searchData[0].youtube_id || searchData[0].id;
-              downloadUrl = makeSafeYoutubeWatchUrl(ytId);
-              uploader = searchData[0].uploader || uploader;
-            }
-          }
-        }
-
-        if (!isMyGen() || !downloadUrl) return;
-
-        apiFetch(`/api/downloads`, {
+        const repairRes = await apiFetch(`/api/music/resolve-audio`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: downloadUrl, title: song.title, uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: ytId }),
-        }).then((r) => r.json()).then((dlData) => {
-          if (dlData && dlData.id && isMyGen()) {
-            const localUrl = `${API_BASE}/api/downloads/stream/${dlData.id}`;
-            audio.src = localUrl;
-            audio.load();
-            setPlaybackError(null);
-            doPlay();
-          }
-        }).catch(() => {});
+          body: JSON.stringify({
+            track: {
+              id: song.id,
+              sourceId: song.youtube_id ?? null,
+              youtubeId: song.youtube_id ?? null,
+              url: song.url ?? song.file_url ?? null,
+              title: song.title,
+              artist: song.artist_name ?? song.artist ?? null,
+              coverUrl: song.image_url ?? song.imageUrl ?? null,
+            },
+            forceRepair: true,
+          }),
+        });
+        const repairJson = repairRes.ok ? await repairRes.json().catch(() => null) : null;
+        const repairedAudioUrl = String(repairJson?.audioUrl || '').trim();
+        if (!isMyGen() || !repairRes.ok || !repairJson?.ok || !repairedAudioUrl) {
+          setPlaybackError('No pudimos reproducir esta canción. Intenta con otra.');
+          if (!lastUserInitiatedRef.current && settings.autoplay) next();
+          return;
+        }
+
+        const resolved = resolveMediaUrl(repairedAudioUrl);
+        audio.src = resolved;
+        audio.load();
+        setCurrentSong((prev) => (prev && prev.id === song.id ? { ...prev, file_url: toStorableFileUrl(repairedAudioUrl) } : prev));
+        setPlaybackError(null);
+        doPlay();
       } finally {
         isRecovering = false;
+        repairingRef.current = false;
       }
     });
 
@@ -728,6 +732,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
 
     audio.onended = async (e?: Event) => {
       if (audioRef.current !== audio) return;
+      if (repairingRef.current && isMyGen()) return;
       const isManualSkip = e && (e as any).detail?.isManualSkip;
       const isCrossfade = e && (e as any).detail?.isCrossfade;
 
@@ -751,13 +756,13 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
         const isRadio = String(state.currentPlaylist.id).startsWith('radio-');
         if (state.shuffle && !isRadio) {
           const remaining = songs.filter((s) => s.id !== state.currentSong?.id);
-          if (remaining.length > 0) playSong(remaining[Math.floor(Math.random() * remaining.length)], state.currentPlaylist, isCrossfade);
-          else if (state.repeatMode === 'all') playSong(songs[0], state.currentPlaylist, isCrossfade);
+          if (remaining.length > 0) playSongInternal(remaining[Math.floor(Math.random() * remaining.length)], state.currentPlaylist, isCrossfade, { userInitiated: false });
+          else if (state.repeatMode === 'all') playSongInternal(songs[0], state.currentPlaylist, isCrossfade, { userInitiated: false });
           else { setIsPlaying(false); setProgress(0); }
         } else {
           const idx = songs.findIndex((s) => s.id === state.currentSong?.id);
-          if (idx !== -1 && idx < songs.length - 1) playSong(songs[idx + 1], state.currentPlaylist, isCrossfade);
-          else if (idx !== -1 && state.repeatMode === 'all') playSong(songs[0], state.currentPlaylist, isCrossfade);
+          if (idx !== -1 && idx < songs.length - 1) playSongInternal(songs[idx + 1], state.currentPlaylist, isCrossfade, { userInitiated: false });
+          else if (idx !== -1 && state.repeatMode === 'all') playSongInternal(songs[0], state.currentPlaylist, isCrossfade, { userInitiated: false });
           else {
             if (settings.autoplay && !autoplayBusyRef.current && state.currentSong) {
               autoplayBusyRef.current = true;
@@ -818,7 +823,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
 
                     if (nextSong) {
                       const newPlaylist = state.currentPlaylist ? { ...state.currentPlaylist, songs: [...(state.currentPlaylist.songs || []), nextSong] } : undefined;
-                      playSong(nextSong, newPlaylist, isCrossfade);
+                      playSongInternal(nextSong, newPlaylist, isCrossfade, { userInitiated: false });
                       setIsPlaying(true);
                       autoplayBusyRef.current = false;
                       return;
@@ -850,6 +855,10 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       }));
     } catch {}
   }, [currentSong, isPlaying, isTooSimilar, resolveMediaUrl, settings.audioQuality, settings.autoplay, toStorableFileUrl, volume]);
+
+  const playSong = useCallback((song: Song, playlist?: Playlist, isCrossfade = false) => {
+    playSongInternal(song, playlist, isCrossfade, { userInitiated: true });
+  }, [playSongInternal]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;

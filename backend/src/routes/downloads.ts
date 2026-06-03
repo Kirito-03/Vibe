@@ -593,11 +593,14 @@ router.get('/stream/:id', async (req: Request, res: Response) => {
     }
 
     if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Archivo no encontrado en disco' });
+      return res.status(404).json({ ok: false, code: 'FILE_MISSING', message: 'Audio file missing' });
     }
 
     const stat = fs.statSync(filePath);
     const fileSize = stat.size;
+    if (!fileSize || fileSize <= 0) {
+      return res.status(404).json({ ok: false, code: 'FILE_MISSING', message: 'Audio file missing' });
+    }
     const ext = path.extname(filePath).toLowerCase();
 
     // Content-Type según extensión

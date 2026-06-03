@@ -124,8 +124,11 @@ export function Home({
               artist: data.artist ?? undefined,
               duration_seconds: data.duration_seconds ?? 0,
               file_url: fileUrl,
+              url: data.url ?? undefined,
               image_url: data.image_url ?? undefined,
               imageUrl: data.image_url ?? undefined,
+              youtube_id: data.youtube_id ?? undefined,
+              source: data.source ?? undefined,
             } as Song);
           }
         });

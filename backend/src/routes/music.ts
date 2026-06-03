@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import pool from '../db';
 import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
 import { admin } from '../firebase';
 import type { ItemsResponse, ItemsSource } from '../utils/response';
-import { isWorkerEnabled, isWorkerSearchEnabled, searchWithWorker, workerHealth } from '../services/mediaWorkerClient';
+import { downloadWithWorkerOptions, isWorkerEnabled, isWorkerSearchEnabled, searchWithWorker, workerHealth } from '../services/mediaWorkerClient';
 import { computeMusicProfileHash, generateMusicSeedsWithDeepSeek, mixQueries, type MusicTasteProfile } from '../services/deepseekRecommendations';
 import { getSearchQueryAlternatives } from '../services/searchAiAssist';
 import { normalizeSearchQuery, normalizeText as normalizeSearchText, rankSearchResults } from '../services/searchRanking';
@@ -63,6 +65,8 @@ const serializeError = (error: any) => ({
   status: error?.response?.status,
 });
 const isDev = () => String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
+const mediaBaseDir = process.env.MEDIA_BASE_DIR || '/app/downloads';
+const resolveAudioPending = new Map<string, Promise<any>>();
 const searchCacheTtlMs = (() => {
   const raw = Number.parseInt(process.env.SEARCH_CACHE_TTL_MS || '600000', 10);
   return Number.isFinite(raw) && raw > 0 ? raw : 600000;
@@ -240,6 +244,75 @@ const extractYoutubeId = (value: unknown): string => {
     return raw.includes('/') ? '' : raw;
   }
   return '';
+};
+
+const isHttpUrl = (v: unknown) => typeof v === 'string' && /^https?:\/\//i.test(v);
+
+const inferExt = (filename: unknown, fallback = '.mp3') => {
+  if (typeof filename !== 'string') return fallback;
+  const ext = path.extname(filename).toLowerCase();
+  if (!ext) return fallback;
+  if (ext.length > 10) return fallback;
+  return ext;
+};
+
+const downloadRemoteToLocal = async (remoteUrl: string, destPath: string) => {
+  const dir = path.dirname(destPath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmpPath = `${destPath}.tmp-${Date.now()}`;
+  const writer = fs.createWriteStream(tmpPath);
+  try {
+    const upstream = await axios.get(remoteUrl, {
+      responseType: 'stream',
+      timeout: 120_000,
+      validateStatus: () => true,
+    });
+    if (upstream.status < 200 || upstream.status >= 300) {
+      try { writer.close(); } catch {}
+      try { fs.unlinkSync(tmpPath); } catch {}
+      return null;
+    }
+    await new Promise<void>((resolve, reject) => {
+      upstream.data.pipe(writer);
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
+    fs.renameSync(tmpPath, destPath);
+    const size = fs.statSync(destPath).size;
+    if (!size || size <= 0) {
+      try { fs.unlinkSync(destPath); } catch {}
+      return null;
+    }
+    return destPath;
+  } catch {
+    try { writer.close(); } catch {}
+    try { fs.unlinkSync(tmpPath); } catch {}
+    return null;
+  }
+};
+
+const convertFailureReason = (error: any): { shouldFallback: boolean; reason: string } => {
+  const status = Number(error?.response?.status || 0);
+  const msg = String(error?.message || '');
+  const detail = String(error?.response?.data?.detail || error?.response?.data?.error || '');
+  const text = `${msg}\n${detail}`.toLowerCase();
+
+  const isTimeout =
+    String(error?.code || '').toLowerCase() === 'econnaborted' ||
+    /timeout/i.test(msg) ||
+    /timeout/i.test(detail);
+
+  const blocked =
+    status === 401 ||
+    status === 403 ||
+    text.includes("sign in to confirm you're not a bot") ||
+    text.includes('requiere autenticación') ||
+    text.includes('cookies') ||
+    text.includes('not a bot');
+
+  if (isTimeout) return { shouldFallback: true, reason: 'timeout' };
+  if (blocked) return { shouldFallback: true, reason: `blocked:${status || 'unknown'}` };
+  return { shouldFallback: false, reason: status ? `http:${status}` : 'error' };
 };
 const cleanSongTitle = (title: string): string => {
   return title
@@ -2290,6 +2363,199 @@ router.get('/history', async (_req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/resolve-audio', async (req, res) => {
+  const reqId = makeReqId();
+  const body = (req as any)?.body || {};
+  const track = body?.track || {};
+  const forceRepair = Boolean(body?.forceRepair);
+
+  const rawTitle = String(track?.title || '').trim();
+  const rawArtist = String(track?.artist || track?.artist_name || '').trim();
+
+  const rawId = String(track?.youtubeId || track?.youtube_id || track?.sourceId || track?.source_id || track?.id || '').trim();
+  let youtubeId = '';
+  if (rawId) {
+    const stripped = rawId.startsWith('youtube:') ? rawId.slice('youtube:'.length) : rawId;
+    if (!stripped.startsWith('dl-')) youtubeId = extractYoutubeId(stripped) || (stripped.includes('/') ? '' : stripped);
+  }
+  if (!youtubeId) {
+    youtubeId = extractYoutubeId(track?.url) || '';
+  }
+
+  console.log('[resolve-audio] start', { reqId, title: truncate(rawTitle, 60), artist: truncate(rawArtist, 60), youtubeId: youtubeId || null, forceRepair });
+
+  const lookupKey = youtubeId ? `yt:${youtubeId}` : `t:${normalizeSearchText(`${rawTitle} ${rawArtist}`)}`;
+  const pending = resolveAudioPending.get(lookupKey);
+  if (pending) {
+    const joined = await pending;
+    return res.status(joined.status).json(joined.payload);
+  }
+
+  const p = (async () => {
+    try {
+      const mode = 'audio';
+
+      const checkCached = async (yt: string) => {
+        const existing = await pool.query(
+          `SELECT * FROM Downloads WHERE youtube_id = $1 AND mode = $2 ORDER BY created_at DESC LIMIT 1`,
+          [yt, mode]
+        );
+        if (!existing.rows.length) return null;
+        const row = existing.rows[0];
+        const filePath = String(row.url || '').trim();
+        if (!filePath || isHttpUrl(filePath)) return null;
+        if (!fs.existsSync(filePath)) return { row, missing: true as const };
+        const size = fs.statSync(filePath).size;
+        if (!size || size <= 0) return { row, missing: true as const };
+        return { row, missing: false as const };
+      };
+
+      const resolveYoutubeIdBySearch = async () => {
+        const q = `${rawTitle} ${rawArtist}`.trim();
+        if (!q) return '';
+
+        for (const pyUrl of downloaderUrls) {
+          try {
+            const response = await axios.get(`${pyUrl}/search`, {
+              timeout: convertTimeoutMs,
+              params: { q, limit: 10 },
+            });
+            const data = response.data;
+            const rows = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
+            const ranked = rankSearchResults(q, rows);
+            const best = ranked.items?.[0];
+            const bestId = String(best?.youtube_id || best?.id || '').trim();
+            if (bestId) return bestId;
+          } catch {}
+        }
+
+        if (isWorkerSearchEnabled()) {
+          const health = await workerHealth().catch(() => ({ ok: false } as any));
+          if (health.ok) {
+            const workerRes = await searchWithWorker(q, 10).catch(() => null);
+            const it = workerRes?.items?.[0];
+            const wid = String(it?.sourceId || it?.id || '').trim().replace(/^youtube:/, '');
+            if (wid) return wid;
+          }
+        }
+
+        return '';
+      };
+
+      if (!youtubeId) {
+        youtubeId = await resolveYoutubeIdBySearch();
+      }
+
+      if (!youtubeId) {
+        return { status: 400, payload: { ok: false, message: 'No se pudo resolver youtubeId para esta canción' } };
+      }
+
+      const cached = await checkCached(youtubeId);
+      if (cached && !cached.missing) {
+        console.log('[resolve-audio] cache-hit', { reqId, id: cached.row.id, youtubeId });
+        return {
+          status: 200,
+          payload: { ok: true, audioUrl: `/api/downloads/stream/${cached.row.id}`, cached: true, source: 'local-cache' },
+        };
+      }
+
+      if (cached && cached.missing) {
+        console.warn('[resolve-audio] stale-cache missing-file', { reqId, id: cached.row.id, youtubeId });
+      }
+
+      const watchUrl = `https://www.youtube.com/watch?v=${youtubeId}`;
+      let savedRow: any | null = null;
+      let resolvedSource: 'convert' | 'worker' = 'convert';
+
+      try {
+        for (const pyUrl of downloaderUrls) {
+          console.log('[resolve-audio] convert start', { reqId, url: pyUrl, youtubeId });
+          const pyRes = await axios.post(
+            `${pyUrl}/download`,
+            { url: watchUrl, mode: 'audio', quality: 'medium', youtube_id: youtubeId },
+            { timeout: 300_000 }
+          );
+          const dlData = pyRes.data || {};
+          const filePath = String(dlData.file_path || dlData.filePath || dlData.url || '').trim();
+          if (!filePath) continue;
+          if (!isHttpUrl(filePath) && fs.existsSync(filePath) && fs.statSync(filePath).size > 0) {
+            const title = String(dlData.title || rawTitle || '').trim() || rawTitle || 'Audio';
+            const uploader = String(dlData.uploader || rawArtist || '').trim() || rawArtist || 'Internet';
+            const duration = Number(dlData.duration_seconds || dlData.duration || 0) || 0;
+            const thumb = String(dlData.thumbnail_url || dlData.thumbnail || '') || null;
+            const filename = String(dlData.filename || path.basename(filePath) || `${youtubeId}.mp3`);
+
+            const insert = await pool.query(
+              `INSERT INTO Downloads (url, title, uploader, duration_seconds, thumbnail_url, filename, mode, youtube_id)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+               RETURNING *`,
+              [filePath, title, uploader, duration, thumb, filename, 'audio', youtubeId]
+            );
+            savedRow = insert.rows[0];
+            resolvedSource = 'convert';
+            break;
+          }
+        }
+      } catch (error: any) {
+        const failure = convertFailureReason(error);
+        console.warn('[resolve-audio] convert failed', { reqId, reason: failure.reason, status: error?.response?.status });
+        if (!failure.shouldFallback) throw error;
+      }
+
+      if (!savedRow) {
+        const shouldTryWorker = isWorkerEnabled();
+        if (!shouldTryWorker) {
+          return { status: 502, payload: { ok: false, message: 'No se pudo descargar (worker deshabilitado)' } };
+        }
+
+        console.log('[resolve-audio] worker fallback start', { reqId, youtubeId });
+        const workerData = await downloadWithWorkerOptions(watchUrl, { kind: 'audio', format: 'mp3', quality: 'medium' });
+        const files = Array.isArray(workerData?.files) ? workerData.files : [];
+        const file0 = files[0] || null;
+        const remoteUrl = String(file0?.url || workerData?.url || workerData?.audioUrl || '').trim();
+        const remoteName = String(file0?.name || workerData?.filename || '').trim();
+        if (!remoteUrl || !isHttpUrl(remoteUrl)) {
+          return { status: 502, payload: { ok: false, message: 'Worker no devolvió un archivo válido' } };
+        }
+
+        const ext = inferExt(remoteName, '.mp3');
+        const dest = path.join(mediaBaseDir, 'audio', `${youtubeId}${ext}`);
+        const stored = await downloadRemoteToLocal(remoteUrl, dest);
+        if (!stored) {
+          return { status: 502, payload: { ok: false, message: 'No se pudo guardar audio del worker' } };
+        }
+
+        const title = rawTitle || 'Audio';
+        const uploader = rawArtist || 'Internet';
+        const duration = 0;
+        const filename = path.basename(stored);
+        const insert = await pool.query(
+          `INSERT INTO Downloads (url, title, uploader, duration_seconds, thumbnail_url, filename, mode, youtube_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+           RETURNING *`,
+          [stored, title, uploader, duration, null, filename, 'audio', youtubeId]
+        );
+        savedRow = insert.rows[0];
+        resolvedSource = 'worker';
+      }
+
+      console.log('[resolve-audio] repaired ok', { reqId, id: savedRow.id, youtubeId, source: resolvedSource });
+      return { status: 200, payload: { ok: true, audioUrl: `/api/downloads/stream/${savedRow.id}`, cached: false, source: resolvedSource } };
+    } catch (error: any) {
+      console.warn('[resolve-audio] failed', { reqId, error: serializeError(error) });
+      return { status: 500, payload: { ok: false, message: 'No se pudo reparar el audio' } };
+    }
+  })();
+
+  resolveAudioPending.set(lookupKey, p);
+  try {
+    const out = await p;
+    return res.status(out.status).json(out.payload);
+  } finally {
+    resolveAudioPending.delete(lookupKey);
   }
 });
 
