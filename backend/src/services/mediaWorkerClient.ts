@@ -62,6 +62,15 @@ export const isWorkerEnabled = (): boolean => {
   return false;
 };
 
+/** Habilita búsqueda vía worker. Desactivar con MEDIA_WORKER_SEARCH_ENABLED=false */
+export const isWorkerSearchEnabled = (): boolean => {
+  if (!isWorkerEnabled()) return false;
+  const raw = process.env.MEDIA_WORKER_SEARCH_ENABLED;
+  // Si no está definida, heredar de isWorkerEnabled (true)
+  if (raw === undefined || raw === '') return true;
+  return getEnvBool(raw);
+};
+
 // ---------------------------------------------------------------------------
 // Bot-detection error patterns (para activar fallback al worker)
 // ---------------------------------------------------------------------------

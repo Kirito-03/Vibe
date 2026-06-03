@@ -9,6 +9,8 @@ import { downloadWithWorkerOptions, isWorkerEnabled, isWorkerSearchEnabled, sear
 import { computeMusicProfileHash, generateMusicSeedsWithDeepSeek, mixQueries, type MusicTasteProfile } from '../services/deepseekRecommendations';
 import { getSearchQueryAlternatives } from '../services/searchAiAssist';
 import { normalizeSearchQuery, normalizeText as normalizeSearchText, rankSearchResults } from '../services/searchRanking';
+import { rerankWithDeepSeek, isSearchRerankEnabled } from '../services/searchDeepseekRerank';
+
 import { rankRecommendationResults } from '../services/recommendationRanking';
 import {
   clearUserRecommendationCache,
@@ -1988,6 +1990,7 @@ router.get('/worker-health', async (_req, res) => {
 
 // ── Search: busca en Downloads (datos reales de la DB) y en YouTube ──
 router.get('/search', async (req, res) => {
+
   const reqId = makeReqId();
   const startedAt = Date.now();
   const rawQuery = String((req.query.q as string) || '').trim();
@@ -1996,14 +1999,15 @@ router.get('/search', async (req, res) => {
   const nq = normalizeSearchQuery(rawQuery);
   if (!nq.normalized) return res.json({ items: [], source: 'search' });
 
-  const cacheKey = `search:${nq.normalized}`;
+  // ── Cache ──────────────────────────────────────────────────────────────────
+  const cacheKey = `search:${nq.normalized}:${String(nq.wantsRemix)}:${String(nq.wantsSlowed)}`;
   const cached = getSearchCache(cacheKey);
   if (cached) {
-    console.log('[search] cache-hit', { reqId, q: truncate(rawQuery, 90) });
-    return res.json(cached);
+    console.log('[search] cache-hit', { reqId, q: truncate(rawQuery, 90), ms: Date.now() - startedAt });
+    return res.json({ ...cached, _cacheHit: true });
   }
 
-  const resultLimit = 15;
+  const resultLimit = 20;
   const words = nq.tokens.length > 0 ? nq.tokens : rawQuery.split(/\s+/).filter(Boolean);
 
   const buildOrConditions = (fields: string[], offset: number) =>
@@ -2014,6 +2018,7 @@ router.get('/search', async (req, res) => {
   const localConditions = buildOrConditions(['title', "COALESCE(uploader, '')"], 1);
   const localParams = words.map((w) => `%${w}%`);
 
+  // ── 1. Resultados locales (Downloads DB) ──────────────────────────────────
   let localRows: any[] = [];
   try {
     const localRes = await pool.query(
@@ -2038,7 +2043,7 @@ router.get('/search', async (req, res) => {
     if (!url) return '';
     if (/^https?:\/\//i.test(url)) return extractYoutubeId(url) || '';
     try {
-      const base = url.split(/[\\/]/).pop() || '';
+      const base = url.split(/[\/\\]/).pop() || '';
       const stem = base.replace(/\.[^.]+$/, '');
       if (/^[a-zA-Z0-9_-]{10,24}$/.test(stem)) return stem;
     } catch {}
@@ -2057,6 +2062,7 @@ router.get('/search', async (req, res) => {
   const localKeys = new Set(localResults.map((loc: any) => `${normalizeSearchText(loc.title)}::${normalizeSearchText(loc.artist)}`));
   const localYoutubeIds = new Set(localResults.map((loc: any) => loc.youtube_id).filter(Boolean));
 
+  // ── 2. Catálogo global (GlobalCatalogTracks) ─────────────────────────────
   let catalogResults: any[] = [];
   try {
     const catConditions = buildOrConditions(['title', "COALESCE(uploader, '')"], 1);
@@ -2086,11 +2092,37 @@ router.get('/search', async (req, res) => {
     catalogResults = [];
   }
 
+  // Añadir catalog a los sets de IDs locales para evitar duplicados en adaptYouTubeRows
   for (const it of catalogResults) {
     localKeys.add(`${normalizeSearchText(it.title)}::${normalizeSearchText(it.artist)}`);
     if (it.youtube_id) localYoutubeIds.add(String(it.youtube_id));
   }
 
+  // ── Helper: deduplicar pool de items por youtubeId antes de rankear ───────
+  const dedupeByYoutubeId = (items: any[]): any[] => {
+    const seen = new Set<string>();
+    const seenTa = new Set<string>();
+    const out: any[] = [];
+    for (const it of items) {
+      const ytId = String(it?.youtube_id || it?.id || '').trim();
+      const titleN = normalizeSearchText(it?.title || '');
+      const artistN = normalizeSearchText(it?.artist || it?.uploader || '');
+      const taKey = titleN && artistN ? `${titleN}::${artistN}` : '';
+
+      if (ytId && seen.has(ytId)) continue;
+      if (taKey && seenTa.has(taKey)) {
+        // Si ya hay uno de la misma ta, solo permitir si es local (priorizar local)
+        if (it?.source !== 'local') continue;
+      }
+
+      if (ytId) seen.add(ytId);
+      if (taKey) seenTa.add(taKey);
+      out.push(it);
+    }
+    return out;
+  };
+
+  // ── 3. Búsqueda externa (Convert / Worker) ────────────────────────────────
   const searchViaConvertOrWorker = async (q: string) => {
     for (const pyUrl of downloaderUrls) {
       try {
@@ -2124,6 +2156,7 @@ router.get('/search', async (req, res) => {
               duration_seconds: t?.duration ?? t?.duration_seconds ?? null,
               thumbnail_url: t?.coverUrl ?? t?.thumbnail_url ?? null,
               url: ytUrl,
+              source: 'youtube',
             };
           });
           const items = adaptYouTubeRows(workerRows, localKeys, localYoutubeIds);
@@ -2152,15 +2185,19 @@ router.get('/search', async (req, res) => {
   let sources = { convert: 0, worker: 0, duck: 0, catalog: catalogResults.length, local: localResults.length };
 
   try {
+    // ── 4. Primera búsqueda externa ─────────────────────────────────────────
     const primary = await searchViaConvertOrWorker(rawQuery);
     ytResults.push(...primary.items);
     if (primary.provider === 'convert') sources.convert += primary.items.length;
     if (primary.provider === 'worker') sources.worker += primary.items.length;
 
-    const combined0 = [...localResults, ...catalogResults, ...ytResults];
+    // ── 5. Rank preliminar para detectar si necesitamos más resultados ───────
+    // Priorizar local sobre catalog/yt en el combinado inicial
+    const combined0 = dedupeByYoutubeId([...localResults, ...catalogResults, ...ytResults]);
     let ranked0 = rankSearchResults(rawQuery, combined0);
 
     if (ranked0.afterRank < 8) {
+      // Expandir query con tokens parciales detectados
       const tokenMap = new Map<string, string>();
       const topTitles = ranked0.topScores.map((t) => String(t.title || '')).slice(0, 6);
       for (const token of nq.tokens) {
@@ -2194,9 +2231,10 @@ router.get('/search', async (req, res) => {
         if (res2.provider === 'worker') sources.worker += res2.items.length;
       }
 
-      ranked0 = rankSearchResults(rawQuery, [...localResults, ...catalogResults, ...ytResults]);
+      ranked0 = rankSearchResults(rawQuery, dedupeByYoutubeId([...localResults, ...catalogResults, ...ytResults]));
     }
 
+    // ── 6. AI query alternatives (DeepSeek como corrector de query, opcional) ─
     if (ranked0.afterRank < 8) {
       const aiQueries = await getSearchQueryAlternatives(rawQuery);
       if (aiQueries && aiQueries.length > 0) {
@@ -2207,10 +2245,11 @@ router.get('/search', async (req, res) => {
           if (res3.provider === 'convert') sources.convert += res3.items.length;
           if (res3.provider === 'worker') sources.worker += res3.items.length;
         }
-        ranked0 = rankSearchResults(rawQuery, [...localResults, ...catalogResults, ...ytResults]);
+        ranked0 = rankSearchResults(rawQuery, dedupeByYoutubeId([...localResults, ...catalogResults, ...ytResults]));
       }
     }
 
+    // ── 7. DuckDuckGo fallback si no hay resultados externos ─────────────────
     if (ytResults.length === 0) {
       const duckRows = await searchDuckDuckGoForYoutube(rawQuery, resultLimit);
       const duck = adaptYouTubeRows(duckRows, localKeys, localYoutubeIds);
@@ -2218,22 +2257,46 @@ router.get('/search', async (req, res) => {
       sources.duck += duck.length;
     }
 
-    const combined = [...localResults, ...catalogResults, ...ytResults];
-    const ranked = rankSearchResults(rawQuery, combined);
+    // ── 8. Combinado final con dedup fuerte antes de rankear ─────────────────
+    // Priorizar: local > catalog > ytResults (local tiene source='local')
+    const combinedAll = dedupeByYoutubeId([...localResults, ...catalogResults, ...ytResults]);
+    const beforeDedupe = combinedAll.length;
+    const ranked = rankSearchResults(rawQuery, combinedAll);
+    const afterDedupe = ranked.afterRank;
+
+    // ── 9. DeepSeek rerank opcional ──────────────────────────────────────────
+    let finalItems = ranked.items;
+    let reranked = false;
+    if (isSearchRerankEnabled() && finalItems.length > 1) {
+      try {
+        finalItems = await rerankWithDeepSeek(rawQuery, finalItems);
+        reranked = true;
+      } catch {
+        // Silencioso — usar ranking local
+      }
+    }
+
+    // ── 10. Upsert al catálogo global ────────────────────────────────────────
+    const ytOnlyItems = finalItems.filter((it) => it?.source === 'youtube' && it?.youtube_id);
+    if (ytOnlyItems.length > 0) {
+      void upsertGlobalCatalogTracks(ytOnlyItems.slice(0, 20), 1).catch(() => {});
+    }
 
     console.log('[search]', { reqId, q: truncate(rawQuery, 90), normalized: truncate(ranked.query.normalized, 90) });
     console.log('[search] sources', { reqId, ...sources, variants: queryVariants.length });
-    console.log('[search] ranked', { reqId, before: ranked.beforeRank, after: ranked.afterRank });
+    console.log('[search] ranked', { reqId, beforeDedupe, afterDedupe, finalItems: finalItems.length, reranked });
     console.log('[search] topResults', ranked.topScores.slice(0, 6));
 
-    const response: any = { items: ranked.items, source: 'search' };
+    const response: any = { items: finalItems, source: 'search' };
     if (isDev()) {
       response.debug = {
         query: rawQuery,
-        normalizedQuery: ranked.query.normalized,
-        beforeRank: ranked.beforeRank,
-        afterRank: ranked.afterRank,
+        normalized: ranked.query.normalized,
         sources,
+        beforeDedupe,
+        afterDedupe,
+        cacheHit: false,
+        reranked,
         queriesUsed: queryVariants.slice(0, 6),
         topScores: ranked.topScores.slice(0, 10),
         ms: Date.now() - startedAt,
@@ -2244,10 +2307,11 @@ router.get('/search', async (req, res) => {
   } catch (error) {
     console.error('[search] error', { reqId, error: serializeError(error) });
     const response: any = { items: [], source: 'search' };
-    if (isDev()) response.debug = { query: rawQuery, normalizedQuery: nq.normalized, error: serializeError(error), ms: Date.now() - startedAt };
+    if (isDev()) response.debug = { query: rawQuery, normalized: nq.normalized, error: serializeError(error), ms: Date.now() - startedAt };
     return res.json(response);
   }
 });
+
 
 // ── GET playlists reales ──
 router.get('/playlists', async (req, res) => {
