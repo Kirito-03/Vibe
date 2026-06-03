@@ -560,6 +560,12 @@ router.get('/stream/:id', async (req: Request, res: Response) => {
     }
 
     const download = result.rows[0];
+
+    const expectedYoutubeId = typeof req.query.expected_youtube_id === 'string' ? req.query.expected_youtube_id.trim() : '';
+    if (expectedYoutubeId && download.youtube_id && download.youtube_id !== expectedYoutubeId) {
+      return res.status(409).json({ ok: false, code: 'SOURCE_MISMATCH', message: 'Cached audio belongs to another track' });
+    }
+
     const filePath = download.url as string;
     if (filePath && /^https?:\/\//i.test(filePath)) {
       try {

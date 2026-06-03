@@ -470,6 +470,17 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     if (currentUser) {
       const key = songKeyFromId(song.id);
       const ytUrl = song.youtube_id ? makeSafeYoutubeWatchUrl(song.youtube_id) : null;
+      let ytId = song.youtube_id || null;
+      if (!ytId && (song.url || song.file_url)) {
+         try {
+           const urlStr = song.url || song.file_url;
+           if (urlStr) {
+             const u = new URL(urlStr);
+             ytId = u.searchParams.get('v') || null;
+           }
+         } catch {}
+      }
+
       setDoc(doc(db, 'users', currentUser.uid, 'recents', key), {
         id: key,
         song_id: song.id,
@@ -477,19 +488,34 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
         artist: song.artist_name ?? song.artist ?? null,
         duration_seconds: song.duration_seconds ?? null,
         image_url: song.image_url ?? song.imageUrl ?? null,
+        coverUrl: song.image_url ?? song.imageUrl ?? null,
         file_url: toStorableFileUrl(song.file_url),
-        url: ytUrl,
-        youtube_id: song.youtube_id ?? null,
+        audioUrl: toStorableFileUrl(song.file_url),
+        url: ytUrl || song.url || null,
+        youtube_id: ytId,
+        youtubeId: ytId,
+        sourceId: ytId ?? song.id ?? null,
+        videoId: ytId,
         source: song.source ?? 'youtube',
         played_at: serverTimestamp(),
       }, { merge: true }).catch(() => {});
     }
 
     const resolvedUrl = resolveMediaUrl(song.file_url);
-    if (import.meta.env.DEV) console.debug('[playback/audioUrl]', resolvedUrl);
-    let isInternalConvert = false;
+    
+    let finalAudioUrl = resolvedUrl;
     try {
       const u = new URL(resolvedUrl);
+      if (u.pathname.includes('/stream/') && song.youtube_id) {
+        u.searchParams.set('expected_youtube_id', song.youtube_id);
+      }
+      finalAudioUrl = u.href;
+    } catch {}
+
+    if (import.meta.env.DEV) console.debug('[playback/audioUrl]', finalAudioUrl);
+    let isInternalConvert = false;
+    try {
+      const u = new URL(finalAudioUrl);
       if (u.hostname === 'convert') isInternalConvert = true;
     } catch {}
     if (isInternalConvert) {
@@ -497,11 +523,11 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       return;
     }
     let audio: HTMLAudioElement;
-    if (preloadedAudioRef.current && preloadedAudioRef.current.src.includes(resolvedUrl)) {
+    if (preloadedAudioRef.current && preloadedAudioRef.current.src.includes(finalAudioUrl)) {
       audio = preloadedAudioRef.current;
       preloadedAudioRef.current = null;
     } else {
-      audio = new Audio(resolvedUrl);
+      audio = new Audio(finalAudioUrl);
     }
     audioRef.current = audio;
 
@@ -611,6 +637,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
               coverUrl: song.image_url ?? song.imageUrl ?? null,
             },
             forceRepair: true,
+            userInitiated: lastUserInitiatedRef.current,
           }),
         });
         const repairJson = repairRes.ok ? await repairRes.json().catch(() => null) : null;
@@ -622,9 +649,28 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
         }
 
         const resolved = resolveMediaUrl(repairedAudioUrl);
-        audio.src = resolved;
+        let finalRepairedAudioUrl = resolved;
+        try {
+          const u = new URL(resolved);
+          const newYtId = repairJson?.track?.youtubeId || song.youtube_id;
+          if (u.pathname.includes('/stream/') && newYtId) {
+            u.searchParams.set('expected_youtube_id', newYtId);
+          }
+          finalRepairedAudioUrl = u.href;
+        } catch {}
+
+        audio.src = finalRepairedAudioUrl;
         audio.load();
-        setCurrentSong((prev) => (prev && prev.id === song.id ? { ...prev, file_url: toStorableFileUrl(repairedAudioUrl) } : prev));
+        setCurrentSong((prev) => {
+          if (prev && prev.id === song.id) {
+            return {
+              ...prev,
+              file_url: toStorableFileUrl(repairedAudioUrl),
+              youtube_id: repairJson?.track?.youtubeId || prev.youtube_id,
+            };
+          }
+          return prev;
+        });
         setPlaybackError(null);
         doPlay();
       } finally {

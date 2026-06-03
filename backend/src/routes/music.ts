@@ -2479,7 +2479,29 @@ router.post('/resolve-audio', async (req, res) => {
 
       const resolveYoutubeIdBySearch = async () => {
         const q = `${rawTitle} ${rawArtist}`.trim();
-        if (!q) return '';
+        if (!q) return { id: '', safe: false };
+
+        const isSafeMatch = (candidate: any) => {
+          if (!candidate) return false;
+          const cTitle = (candidate.title || '').toLowerCase();
+          const qTitle = rawTitle.toLowerCase();
+          
+          const badModifiers = ['remix', 'slowed', 'sped up', 'cover', 'karaoke', 'instrumental'];
+          for (const mod of badModifiers) {
+            if (cTitle.includes(mod) && !qTitle.includes(mod)) return false;
+          }
+
+          const qTokens = qTitle.replace(/[^\w\s]/gi, '').split(/\s+/).filter((t: string) => t.length > 2);
+          if (qTokens.length > 0) {
+            let matchedTokens = 0;
+            for (const t of qTokens) {
+              if (cTitle.includes(t)) matchedTokens++;
+            }
+            if (matchedTokens / qTokens.length < 0.5) return false;
+          }
+
+          return true;
+        };
 
         for (const pyUrl of downloaderUrls) {
           try {
@@ -2492,7 +2514,7 @@ router.post('/resolve-audio', async (req, res) => {
             const ranked = rankSearchResults(q, rows);
             const best = ranked.items?.[0];
             const bestId = String(best?.youtube_id || best?.id || '').trim();
-            if (bestId) return bestId;
+            if (bestId) return { id: bestId, safe: isSafeMatch(best) };
           } catch {}
         }
 
@@ -2500,17 +2522,27 @@ router.post('/resolve-audio', async (req, res) => {
           const health = await workerHealth().catch(() => ({ ok: false } as any));
           if (health.ok) {
             const workerRes = await searchWithWorker(q, 10).catch(() => null);
-            const it = workerRes?.items?.[0];
+            const ranked = rankSearchResults(q, workerRes?.items || []);
+            const it = ranked.items?.[0];
             const wid = String(it?.sourceId || it?.id || '').trim().replace(/^youtube:/, '');
-            if (wid) return wid;
+            if (wid) return { id: wid, safe: isSafeMatch(it) };
           }
         }
 
-        return '';
+        return { id: '', safe: false };
       };
 
+      let isUnsafeFallback = false;
       if (!youtubeId) {
-        youtubeId = await resolveYoutubeIdBySearch();
+        const searchRes = await resolveYoutubeIdBySearch();
+        youtubeId = searchRes.id;
+        if (!searchRes.safe && youtubeId) {
+          isUnsafeFallback = true;
+        }
+      }
+
+      if (isUnsafeFallback) {
+         return { status: 409, payload: { ok: false, code: 'UNSAFE_MATCH', message: 'No se encontró una coincidencia segura para reparar esta canción' } };
       }
 
       if (!youtubeId) {
