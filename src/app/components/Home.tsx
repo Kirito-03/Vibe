@@ -370,9 +370,23 @@ export function Home({
       
       setDownloadingIds(prev => new Set(prev).add(idStr));
       try {
-        // 1. Play instantly using the stream-direct endpoint
         const youtubeId = d.youtube_id || String(d.id);
         const safeUrl = makeSafeYoutubeWatchUrl(youtubeId);
+        try {
+          const cacheRes = await apiFetch(`/api/downloads/resolve?youtube_id=${encodeURIComponent(youtubeId)}&mode=audio`);
+          const cacheJson = cacheRes.ok ? await cacheRes.json().catch(() => null) : null;
+          if (cacheJson?.cached && cacheJson?.audioUrl) {
+            onSongPlay({ ...song, file_url: String(cacheJson.audioUrl), isPlaying: true });
+            setDownloadingIds(prev => {
+              const next = new Set(prev);
+              next.delete(idStr);
+              return next;
+            });
+            return;
+          }
+        } catch {}
+
+        // 1. Play instantly using the stream-direct endpoint
         const instantUrl = `${API_BASE}/api/downloads/stream-direct?url=${encodeURIComponent(safeUrl)}`;
         const tempSong = {
           ...song,

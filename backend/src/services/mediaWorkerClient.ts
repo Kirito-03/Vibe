@@ -30,6 +30,11 @@ export const isWorkerEnabled = () => {
   return enabled && !!url;
 };
 
+export const isWorkerSearchEnabled = () => {
+  if (!isWorkerEnabled()) return false;
+  return getEnvBool(process.env.MEDIA_WORKER_SEARCH_ENABLED);
+};
+
 const getWorkerConfig = () => {
   const url = process.env.MEDIA_WORKER_URL ? normalizeUrl(process.env.MEDIA_WORKER_URL) : '';
   const timeoutMs = Number.parseInt(process.env.MEDIA_WORKER_TIMEOUT_MS || '30000', 10);
@@ -37,9 +42,11 @@ const getWorkerConfig = () => {
 };
 
 const logBase = (extra: Record<string, unknown>) => {
+  const { timeoutMs } = getWorkerConfig();
   console.log('[worker]', {
     enabled: isWorkerEnabled(),
     url: process.env.MEDIA_WORKER_URL || null,
+    timeoutMs,
     ...extra,
   });
 };
@@ -59,13 +66,16 @@ export const workerHealth = async () => {
 };
 
 export const searchWithWorker = async (query: string, limit = 30): Promise<WorkerItemsResponse<WorkerTrack> | null> => {
-  if (!isWorkerEnabled()) return null;
+  if (!isWorkerSearchEnabled()) {
+    if (isWorkerEnabled()) logBase({ endpoint: '/search', disabled: true });
+    return null;
+  }
   const q = String(query || '').trim();
   if (!q) return null;
   const { url, timeoutMs } = getWorkerConfig();
   try {
     logBase({ endpoint: '/search', query: q, timeoutMs });
-    const res = await axios.post(`${url}/search`, { query: q, limit }, { timeout: timeoutMs });
+    const res = await axios.post(`${url}/search`, { q, query: q, limit }, { timeout: timeoutMs });
     const data = res.data;
     const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
     logBase({ endpoint: '/search', status: res.status, items: items.length });

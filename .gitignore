@@ -53,3 +53,6 @@ logs/
 Thumbs.db
 
 .vscode/
+
+__pycache__/
+*.py[cod]

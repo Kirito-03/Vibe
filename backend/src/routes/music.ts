@@ -3,7 +3,7 @@ import pool from '../db';
 import axios from 'axios';
 import { admin } from '../firebase';
 import type { ItemsResponse, ItemsSource } from '../utils/response';
-import { isWorkerEnabled, searchWithWorker, workerHealth } from '../services/mediaWorkerClient';
+import { isWorkerEnabled, isWorkerSearchEnabled, searchWithWorker, workerHealth } from '../services/mediaWorkerClient';
 import { computeMusicProfileHash, generateMusicSeedsWithDeepSeek, mixQueries, type MusicTasteProfile } from '../services/deepseekRecommendations';
 import { getSearchQueryAlternatives } from '../services/searchAiAssist';
 import { normalizeSearchQuery, normalizeText as normalizeSearchText, rankSearchResults } from '../services/searchRanking';
@@ -63,6 +63,27 @@ const serializeError = (error: any) => ({
   status: error?.response?.status,
 });
 const isDev = () => String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
+const searchCacheTtlMs = (() => {
+  const raw = Number.parseInt(process.env.SEARCH_CACHE_TTL_MS || '600000', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 600000;
+})();
+const searchCache = new Map<string, { ts: number; payload: any }>();
+const getSearchCache = (key: string) => {
+  const v = searchCache.get(key);
+  if (!v) return null;
+  if (Date.now() - v.ts > searchCacheTtlMs) {
+    searchCache.delete(key);
+    return null;
+  }
+  return v.payload;
+};
+const setSearchCache = (key: string, payload: any) => {
+  searchCache.set(key, { ts: Date.now(), payload });
+  const maxSize = 250;
+  if (searchCache.size <= maxSize) return;
+  const first = searchCache.keys().next().value;
+  if (first) searchCache.delete(first);
+};
 const normalizeKey = (value: unknown) => normalizeText(value).replace(/\s+/g, ' ').trim();
 const getItemYoutubeId = (it: any) => String(it?.youtube_id || it?.id || '').trim();
 const getItemArtist = (it: any) => String(it?.artist || it?.uploader || '').trim();
@@ -1902,6 +1923,13 @@ router.get('/search', async (req, res) => {
   const nq = normalizeSearchQuery(rawQuery);
   if (!nq.normalized) return res.json({ items: [], source: 'search' });
 
+  const cacheKey = `search:${nq.normalized}`;
+  const cached = getSearchCache(cacheKey);
+  if (cached) {
+    console.log('[search] cache-hit', { reqId, q: truncate(rawQuery, 90) });
+    return res.json(cached);
+  }
+
   const resultLimit = 15;
   const words = nq.tokens.length > 0 ? nq.tokens : rawQuery.split(/\s+/).filter(Boolean);
 
@@ -1930,8 +1958,23 @@ router.get('/search', async (req, res) => {
     localRows = [];
   }
 
+  const inferYoutubeIdFromLocal = (row: any) => {
+    const raw = String(row?.youtube_id || '').trim();
+    if (raw) return raw;
+    const url = String(row?.url || '').trim();
+    if (!url) return '';
+    if (/^https?:\/\//i.test(url)) return extractYoutubeId(url) || '';
+    try {
+      const base = url.split(/[\\/]/).pop() || '';
+      const stem = base.replace(/\.[^.]+$/, '');
+      if (/^[a-zA-Z0-9_-]{10,24}$/.test(stem)) return stem;
+    } catch {}
+    return '';
+  };
+
   const localResults = localRows.map((row) => ({
     ...row,
+    youtube_id: inferYoutubeIdFromLocal(row) || row.youtube_id,
     artist: row.uploader,
     duration_seconds: row.duration,
     thumbnail_url: row.thumbnail,
@@ -1991,29 +2034,33 @@ router.get('/search', async (req, res) => {
       } catch {}
     }
 
-    const health = await workerHealth().catch(() => ({ ok: false, status: 0 } as any));
-    if (health.ok) {
-      const workerRes = await searchWithWorker(q, resultLimit).catch(() => null);
-      if (workerRes?.items?.length) {
-        const workerRows = workerRes.items.map((t: any) => {
-          const sid = String(t?.sourceId ?? '').trim() || String(t?.id ?? '').replace(/^youtube:/, '').trim();
-          const safeId = sid || extractYoutubeId(t?.url);
-          const ytUrl = t?.url || (safeId ? `https://www.youtube.com/watch?v=${safeId}` : '');
-          return {
-            id: safeId,
-            youtube_id: safeId,
-            title: t?.title ?? '',
-            uploader: t?.artist ?? t?.uploader ?? t?.author ?? 'Internet',
-            duration_seconds: t?.duration ?? t?.duration_seconds ?? null,
-            thumbnail_url: t?.coverUrl ?? t?.thumbnail_url ?? null,
-            url: ytUrl,
-          };
-        });
-        const items = adaptYouTubeRows(workerRows, localKeys, localYoutubeIds);
-        if (items.length > 0) return { items, provider: 'worker' as const };
+    if (isWorkerSearchEnabled()) {
+      const health = await workerHealth().catch(() => ({ ok: false, status: 0 } as any));
+      if (health.ok) {
+        const workerRes = await searchWithWorker(q, resultLimit).catch(() => null);
+        if (workerRes?.items?.length) {
+          const workerRows = workerRes.items.map((t: any) => {
+            const sid = String(t?.sourceId ?? '').trim() || String(t?.id ?? '').replace(/^youtube:/, '').trim();
+            const safeId = sid || extractYoutubeId(t?.url);
+            const ytUrl = t?.url || (safeId ? `https://www.youtube.com/watch?v=${safeId}` : '');
+            return {
+              id: safeId,
+              youtube_id: safeId,
+              title: t?.title ?? '',
+              uploader: t?.artist ?? t?.uploader ?? t?.author ?? 'Internet',
+              duration_seconds: t?.duration ?? t?.duration_seconds ?? null,
+              thumbnail_url: t?.coverUrl ?? t?.thumbnail_url ?? null,
+              url: ytUrl,
+            };
+          });
+          const items = adaptYouTubeRows(workerRows, localKeys, localYoutubeIds);
+          if (items.length > 0) return { items, provider: 'worker' as const };
+        }
+      } else if (isWorkerEnabled()) {
+        console.warn('[worker/search] skipped (unhealthy)', { reqId, status: health.status });
       }
     } else if (isWorkerEnabled()) {
-      console.warn('[worker/search] skipped (unhealthy)', { reqId, status: health.status });
+      console.log('[worker/search] disabled', { reqId });
     }
 
     return { items: [] as any[], provider: 'none' as const };
@@ -2119,6 +2166,7 @@ router.get('/search', async (req, res) => {
         ms: Date.now() - startedAt,
       };
     }
+    setSearchCache(cacheKey, response);
     return res.json(response);
   } catch (error) {
     console.error('[search] error', { reqId, error: serializeError(error) });

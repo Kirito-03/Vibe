@@ -11,6 +11,7 @@ const router = Router();
 const DOWNLOADER_URL = process.env.DOWNLOADER_URL || 'http://convert:8000';
 const MEDIA_BASE_DIR = process.env.MEDIA_BASE_DIR || '/app/downloads';
 let schemaReadyPromise: Promise<void> | null = null;
+const pendingDownloads = new Map<string, Promise<{ status: number; row: any }>>();
 
 const ensureDownloadsSchema = async () => {
   await pool.query(`ALTER TABLE Downloads ADD COLUMN IF NOT EXISTS youtube_id VARCHAR(32)`);
@@ -76,6 +77,8 @@ const safeBaseName = (name: unknown, fallback: string) => {
   const cleaned = base.replace(/[^\w.\-()+\[\] ]+/g, '').trim();
   return cleaned || fallback;
 };
+
+const normalizeKey = (value: unknown) => String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 const convertFailureReason = (error: any): { shouldFallback: boolean; reason: string } => {
   const status = Number(error?.response?.status || 0);
@@ -204,6 +207,50 @@ const toApiDownload = (row: any) => {
 };
 
 // ──────────────────────────────────────────────
+// GET /api/downloads/resolve → cache-hit rápido (sin descargar)
+// ──────────────────────────────────────────────
+router.get('/resolve', async (req: Request, res: Response) => {
+  const youtubeId = String(req.query.youtube_id || '').trim();
+  const mode = String(req.query.mode || 'audio').trim() === 'video' ? 'video' : 'audio';
+  if (!youtubeId) return res.status(400).json({ ok: false, error: 'youtube_id requerido' });
+
+  try {
+    await ensureDownloadsSchemaReady();
+    const existingByYoutubeId = await pool.query(
+      `SELECT * FROM Downloads WHERE youtube_id = $1 AND mode = $2 ORDER BY created_at DESC LIMIT 1`,
+      [youtubeId, mode]
+    );
+    if (existingByYoutubeId.rows.length === 0) {
+      return res.json({ ok: true, cached: false, source: 'miss' });
+    }
+
+    const existing = existingByYoutubeId.rows[0];
+    const existingPath = existing.url as string;
+    if (!existingPath || /^https?:\/\//i.test(existingPath)) {
+      return res.json({ ok: true, cached: false, source: 'miss' });
+    }
+    if (!fs.existsSync(existingPath)) {
+      return res.json({ ok: true, cached: false, source: 'missing-file' });
+    }
+    const size = fs.statSync(existingPath).size;
+    if (!size || size <= 0) {
+      return res.json({ ok: true, cached: false, source: 'missing-file' });
+    }
+
+    return res.json({
+      ok: true,
+      cached: true,
+      source: 'local-cache',
+      downloadId: existing.id,
+      audioUrl: `/api/downloads/stream/${existing.id}`,
+    });
+  } catch (error: any) {
+    console.error('[downloads] resolve error', { message: error?.message });
+    return res.status(500).json({ ok: false, error: 'Internal server error' });
+  }
+});
+
+// ──────────────────────────────────────────────
 // POST /api/downloads  →  solicita descarga
 // ──────────────────────────────────────────────
 router.post('/', async (req: Request, res: Response) => {
@@ -235,6 +282,7 @@ router.post('/', async (req: Request, res: Response) => {
     const extractedYoutubeId = typeof youtube_id === 'string' && youtube_id.trim()
       ? youtube_id.trim()
       : extractYoutubeId(url);
+    const pendingKey = `${mode}:${extractedYoutubeId || normalizeKey(url)}`;
 
     if (extractedYoutubeId) {
       const existingByYoutubeId = await pool.query(
@@ -253,6 +301,14 @@ router.post('/', async (req: Request, res: Response) => {
       }
     }
 
+    const pending = pendingDownloads.get(pendingKey);
+    if (pending) {
+      console.log('[downloads] join pending download', { youtubeId: extractedYoutubeId || null, mode });
+      const joined = await pending;
+      return res.status(joined.status).json(toApiDownload(joined.row));
+    }
+
+    const p = (async () => {
     let dlData: any | null = null;
     try {
       const pyRes = await axios.post(
@@ -320,10 +376,10 @@ router.post('/', async (req: Request, res: Response) => {
       const existing = existingByMetadata.rows[0];
       const existingPath = existing.url as string;
       if (existingPath && /^https?:\/\//i.test(existingPath)) {
-        return res.status(200).json(toApiDownload(existing));
+        return { status: 200, row: existing };
       }
       if (existingPath && fs.existsSync(existingPath)) {
-        return res.status(200).json(toApiDownload(existing));
+        return { status: 200, row: existing };
       }
     }
 
@@ -369,7 +425,16 @@ router.post('/', async (req: Request, res: Response) => {
       ).catch(() => {});
     }
 
-    return res.status(201).json(toApiDownload(saved));
+    return { status: 201, row: saved };
+    })();
+
+    pendingDownloads.set(pendingKey, p);
+    try {
+      const final = await p;
+      return res.status(final.status).json(toApiDownload(final.row));
+    } finally {
+      pendingDownloads.delete(pendingKey);
+    }
   } catch (error: any) {
     console.error('[downloads] Error:', error?.response?.data || error.message);
     const detail = error?.response?.data?.detail || error.message;

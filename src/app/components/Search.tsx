@@ -178,6 +178,37 @@ export function Search({ onSongPlay, currentSong, isPlaying }: SearchProps) {
       try {
         const youtubeId = d.youtube_id || String(d.id);
         const safeUrl = makeSafeYoutubeWatchUrl(youtubeId);
+        try {
+          const cacheRes = await apiFetch(`/api/downloads/resolve?youtube_id=${encodeURIComponent(youtubeId)}&mode=audio`);
+          const cacheJson = cacheRes.ok ? await cacheRes.json().catch(() => null) : null;
+          if (cacheJson?.cached && cacheJson?.audioUrl) {
+            const who = d.uploader && d.uploader !== 'YouTube' && d.uploader !== 'YouTube Music' ? d.uploader : 'Internet';
+            const dur = d.duration_seconds ?? 0;
+            onSongPlay({
+              id: youtubeId,
+              youtube_id: youtubeId,
+              title: d.title,
+              artist: who,
+              artist_name: who,
+              duration_seconds: dur,
+              durationSecs: dur,
+              duration: dur ? `${Math.floor(dur / 60)}:${(dur % 60).toString().padStart(2, '0')}` : '0:00',
+              imageUrl: d.thumbnail_url || '',
+              image_url: d.thumbnail_url || '',
+              file_url: String(cacheJson.audioUrl),
+              source: 'local',
+              isPlaying: true,
+            });
+            setLoadingId(null);
+            setDownloadingIds((prev) => {
+              const next = new Set(prev);
+              next.delete(idStr);
+              return next;
+            });
+            return;
+          }
+        } catch {}
+
         const instantUrl = `${API_BASE}/api/downloads/stream-direct?url=${encodeURIComponent(safeUrl)}`;
         const who = d.uploader && d.uploader !== 'YouTube' && d.uploader !== 'YouTube Music' ? d.uploader : 'Internet';
         const dur = d.duration_seconds ?? 0;

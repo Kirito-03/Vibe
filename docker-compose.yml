@@ -70,6 +70,7 @@ services:
       MEDIA_WORKER_URL: ${MEDIA_WORKER_URL:-}
       MEDIA_WORKER_ENABLED: ${MEDIA_WORKER_ENABLED:-false}
       MEDIA_WORKER_TIMEOUT_MS: ${MEDIA_WORKER_TIMEOUT_MS:-30000}
+      MEDIA_WORKER_SEARCH_ENABLED: ${MEDIA_WORKER_SEARCH_ENABLED:-false}
     volumes:
       - mp3_storage:/app/downloads
       - ./Convert/cookies.txt:/app/cookies.txt:ro
