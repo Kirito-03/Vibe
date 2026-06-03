@@ -5,6 +5,14 @@ type WorkerItemsResponse<T> = {
   source?: string;
 };
 
+export type WorkerCapabilities = {
+  search?: boolean;
+  download?: boolean;
+  files?: boolean;
+  extract?: boolean;
+  cleanup?: boolean;
+};
+
 export type WorkerTrack = {
   id: string;
   sourceId?: string;
@@ -34,6 +42,10 @@ export const isWorkerSearchEnabled = () => {
   if (!isWorkerEnabled()) return false;
   return getEnvBool(process.env.MEDIA_WORKER_SEARCH_ENABLED);
 };
+
+let cachedCapabilities: WorkerCapabilities | null = null;
+let cachedCapabilitiesAt = 0;
+let workerSearchDisabledUntil = 0;
 
 const getWorkerConfig = () => {
   const url = process.env.MEDIA_WORKER_URL ? normalizeUrl(process.env.MEDIA_WORKER_URL) : '';
@@ -65,15 +77,41 @@ export const workerHealth = async () => {
   }
 };
 
+export const getWorkerCapabilities = async (): Promise<WorkerCapabilities | null> => {
+  if (!isWorkerEnabled()) return null;
+  const ttlMs = 60_000;
+  if (cachedCapabilities && Date.now() - cachedCapabilitiesAt < ttlMs) return cachedCapabilities;
+
+  const health = await workerHealth();
+  const caps = (health as any)?.data?.capabilities;
+  if (caps && typeof caps === 'object') {
+    cachedCapabilities = caps as WorkerCapabilities;
+    cachedCapabilitiesAt = Date.now();
+    return cachedCapabilities;
+  }
+  cachedCapabilities = null;
+  cachedCapabilitiesAt = Date.now();
+  return null;
+};
+
 export const searchWithWorker = async (query: string, limit = 30): Promise<WorkerItemsResponse<WorkerTrack> | null> => {
   if (!isWorkerSearchEnabled()) {
     if (isWorkerEnabled()) logBase({ endpoint: '/search', disabled: true });
+    return null;
+  }
+  if (Date.now() < workerSearchDisabledUntil) {
+    logBase({ endpoint: '/search', disabled: true, reason: 'cooldown' });
     return null;
   }
   const q = String(query || '').trim();
   if (!q) return null;
   const { url, timeoutMs } = getWorkerConfig();
   try {
+    const caps = await getWorkerCapabilities().catch(() => null);
+    if (caps && caps.search === false) {
+      logBase({ endpoint: '/search', disabled: true, reason: 'no-capability' });
+      return null;
+    }
     logBase({ endpoint: '/search', query: q, timeoutMs });
     const res = await axios.post(`${url}/search`, { q, query: q, limit }, { timeout: timeoutMs });
     const data = res.data;
@@ -81,6 +119,12 @@ export const searchWithWorker = async (query: string, limit = 30): Promise<Worke
     logBase({ endpoint: '/search', status: res.status, items: items.length });
     return { items, source: data?.source || 'worker' };
   } catch (error: any) {
+    const status = Number(error?.response?.status || 0);
+    if (status === 404) {
+      workerSearchDisabledUntil = Date.now() + 10 * 60_000;
+      logBase({ endpoint: '/search', disabled: true, reason: '404', until: workerSearchDisabledUntil });
+      return null;
+    }
     logBase({
       endpoint: '/search',
       query: q,
@@ -115,6 +159,32 @@ export const downloadWithWorker = async (urlInput: string): Promise<any | null> 
   try {
     logBase({ endpoint: '/download', timeoutMs });
     const res = await axios.post(`${baseUrl}/download`, { url }, { timeout: timeoutMs });
+    logBase({ endpoint: '/download', status: res.status });
+    return res.data || null;
+  } catch (error: any) {
+    logBase({ endpoint: '/download', error: error?.message, status: error?.response?.status });
+    return null;
+  }
+};
+
+export const downloadWithWorkerOptions = async (
+  urlInput: string,
+  opts?: { kind?: 'audio' | 'video'; format?: string; quality?: string }
+): Promise<any | null> => {
+  if (!isWorkerEnabled()) return null;
+  const url = String(urlInput || '').trim();
+  if (!url) return null;
+  const kind = opts?.kind;
+  const format = opts?.format;
+  const quality = opts?.quality;
+  const { url: baseUrl, timeoutMs } = getWorkerConfig();
+  try {
+    logBase({ endpoint: '/download', timeoutMs, kind: kind || null });
+    const res = await axios.post(
+      `${baseUrl}/download`,
+      { url, kind, format, quality },
+      { timeout: timeoutMs }
+    );
     logBase({ endpoint: '/download', status: res.status });
     return res.data || null;
   } catch (error: any) {
