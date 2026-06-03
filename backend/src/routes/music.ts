@@ -2608,12 +2608,10 @@ router.post('/resolve-audio', async (req, res) => {
         }
 
         console.log('[resolve-audio] worker fallback start', { reqId, youtubeId });
-        const workerData = await downloadWithWorkerOptions(watchUrl, { kind: 'audio', format: 'mp3', quality: 'medium' });
-        const files = Array.isArray(workerData?.files) ? workerData.files : [];
-        const file0 = files[0] || null;
-        const remoteUrl = String(file0?.url || workerData?.url || workerData?.audioUrl || '').trim();
-        const remoteName = String(file0?.name || workerData?.filename || '').trim();
-        if (!remoteUrl || !isHttpUrl(remoteUrl)) {
+        const workerResult = await downloadWithWorkerOptions(watchUrl, { kind: 'audio', format: 'mp3', quality: 'medium' });
+        const remoteUrl = workerResult?.fileUrl || '';
+        const remoteName = workerResult?.filename || '';
+        if (!workerResult?.ok || !remoteUrl || !isHttpUrl(remoteUrl)) {
           return { status: 502, payload: { ok: false, message: 'Worker no devolvió un archivo válido' } };
         }
 

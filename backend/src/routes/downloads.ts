@@ -104,12 +104,8 @@ const convertFailureReason = (error: any): { shouldFallback: boolean; reason: st
   return { shouldFallback: false, reason: status ? `http:${status}` : 'error' };
 };
 
-const normalizeWorkerDownload = (data: any) => {
-  const ok = data?.ok === true || data?.success === true || !!(data?.url || data?.audioUrl || data?.file_url);
-  const fileUrl = data?.url || data?.audioUrl || data?.file_url || null;
-  const filename = data?.filename || data?.name || null;
-  return { ok, fileUrl, filename, raw: data };
-};
+// normalizeWorkerDownload removed — now using normalizeWorkerResponse from mediaWorkerClient
+// which correctly reads files[0].url from the worker universal response format
 
 const allowedRemoteHosts = () => {
   let workerHost = '';
@@ -323,28 +319,42 @@ router.post('/', async (req: Request, res: Response) => {
 
       if (failure.shouldFallback && isWorkerEnabled()) {
         console.log('[worker/download] fallback=true', { url });
-        const workerData = await downloadWithWorker(url);
-        const norm = normalizeWorkerDownload(workerData);
-        if (norm.ok && isHttpUrl(norm.fileUrl)) {
-          const ext = inferExt(norm.filename, mode === 'video' ? '.mp4' : '.mp3');
-          const baseName = extractedYoutubeId ? `${extractedYoutubeId}${ext}` : safeBaseName(norm.filename, `worker-${Date.now()}${ext}`);
+        const workerResult = await downloadWithWorker(url);
+        if (workerResult && workerResult.ok && workerResult.fileUrl) {
+          const ext = inferExt(workerResult.filename, mode === 'video' ? '.mp4' : '.mp3');
+          const baseName = extractedYoutubeId
+            ? `${extractedYoutubeId}${ext}`
+            : safeBaseName(workerResult.filename, `worker-${Date.now()}${ext}`);
           const localPath = path.join(MEDIA_BASE_DIR, mode === 'video' ? 'video' : 'audio', baseName);
-          const stored = await downloadRemoteToLocal(String(norm.fileUrl), localPath);
+          console.log('[worker/file-copy] start', { url: workerResult.fileUrl.slice(0, 80), dest: baseName });
+          const stored = await downloadRemoteToLocal(String(workerResult.fileUrl), localPath);
           if (stored) {
+            const storedSize = fs.statSync(stored).size;
+            console.log('[worker/file-copy] ok', { bytes: storedSize, dest: path.basename(stored) });
             dlData = {
-              ...workerData,
+              ok: true,
+              title: workerResult.raw?.title || workerResult.raw?.files?.[0]?.name || null,
+              uploader: workerResult.raw?.uploader || null,
+              duration_seconds: workerResult.raw?.duration || workerResult.raw?.duration_seconds || null,
+              thumbnail_url: workerResult.raw?.thumbnail || workerResult.raw?.thumbnail_url || null,
               filename: path.basename(stored),
               file_path: stored,
+              source: 'worker',
             };
-            console.log('[worker/download] ok', { stored: path.basename(stored) });
           } else {
-            console.warn('[worker/download] failed', { reason: 'download_remote_failed' });
+            console.warn('[worker/file-copy] failed', { reason: 'WORKER_FILE_COPY_FAILED', url: workerResult.fileUrl.slice(0, 80) });
           }
-        } else {
-          console.warn('[worker/download] failed', { reason: 'empty_response' });
+        } else if (workerResult !== null) {
+          console.warn('[worker/download] empty_response', { ok: workerResult?.ok, filesCount: workerResult?.files?.length ?? 0 });
         }
       }
-      if (!dlData) throw error;
+      if (!dlData) {
+        // Construct a clear error — don't expose YouTube auth error if worker was tried
+        const finalError = failure.shouldFallback && isWorkerEnabled()
+          ? Object.assign(new Error('No pudimos preparar esta canción. Intenta otra vez.'), { response: { data: { detail: 'No pudimos preparar esta canción. Intenta otra vez.' }, status: 502 } })
+          : error;
+        throw finalError;
+      }
     }
 
     const {

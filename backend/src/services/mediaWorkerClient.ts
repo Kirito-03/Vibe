@@ -33,6 +33,26 @@ export type WorkerTrack = {
   url?: string;
 };
 
+/** Representa un archivo devuelto por el worker en files[] */
+export type WorkerFile = {
+  name: string;
+  url: string;
+  kind?: string;
+  size?: number;
+};
+
+/** Resultado normalizado de una descarga worker */
+export type WorkerDownloadResult = {
+  ok: boolean;
+  cached: boolean;
+  source: string;
+  files: WorkerFile[];
+  /** fileUrl apunta al primer archivo de audio encontrado */
+  fileUrl: string | null;
+  filename: string | null;
+  raw: any;
+};
+
 // ---------------------------------------------------------------------------
 // Env helpers
 // ---------------------------------------------------------------------------
@@ -48,25 +68,21 @@ const getWorkerConfig = () => {
   const url = process.env.MEDIA_WORKER_URL
     ? normalizeUrl(process.env.MEDIA_WORKER_URL)
     : '';
-  const timeoutMs = Number.parseInt(process.env.MEDIA_WORKER_TIMEOUT_MS || '30000', 10);
-  return { url, timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : 30000 };
+  // Timeout largo para descargas (download puede tardar 60-90s)
+  const timeoutMs = Number.parseInt(process.env.MEDIA_WORKER_TIMEOUT_MS || '90000', 10);
+  return { url, timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 90000 };
 };
 
 export const isWorkerEnabled = (): boolean => {
   const enabled = getEnvBool(process.env.MEDIA_WORKER_ENABLED);
   const { url } = getWorkerConfig();
-  if (enabled && url) {
-    // Log solo en startup (evitar spam en cada request)
-    return true;
-  }
-  return false;
+  return enabled && Boolean(url);
 };
 
 /** Habilita búsqueda vía worker. Desactivar con MEDIA_WORKER_SEARCH_ENABLED=false */
 export const isWorkerSearchEnabled = (): boolean => {
   if (!isWorkerEnabled()) return false;
   const raw = process.env.MEDIA_WORKER_SEARCH_ENABLED;
-  // Si no está definida, heredar de isWorkerEnabled (true)
   if (raw === undefined || raw === '') return true;
   return getEnvBool(raw);
 };
@@ -113,8 +129,11 @@ export const isConvertFallbackError = (error: unknown): boolean => {
 let _cachedCapabilities: WorkerCapabilities | null = null;
 let _cachedCapabilitiesAt = 0;
 let _workerUnhealthyUntil = 0;
-const CAPABILITIES_TTL_MS = 60_000; // 1 min
-const UNHEALTHY_COOLDOWN_MS = 30_000; // 30s de cooldown si /health falla
+const CAPABILITIES_TTL_MS = 60_000;
+const UNHEALTHY_COOLDOWN_MS = 30_000;
+
+// Health siempre usa timeout corto (3s) para no bloquear requests
+const HEALTH_TIMEOUT_MS = 3000;
 
 export const workerHealth = async (): Promise<{
   ok: boolean;
@@ -124,15 +143,13 @@ export const workerHealth = async (): Promise<{
 }> => {
   if (!isWorkerEnabled()) return { ok: false, status: 0 };
 
-  // Cooldown: no saturar el celular si ya sabemos que está caído
   if (Date.now() < _workerUnhealthyUntil) {
     return { ok: false, status: 0, error: 'worker-cooldown' };
   }
 
-  const { url, timeoutMs } = getWorkerConfig();
-  const healthTimeout = Math.min(timeoutMs, 5000);
+  const { url } = getWorkerConfig();
   try {
-    const res = await axios.get(`${url}/health`, { timeout: healthTimeout });
+    const res = await axios.get(`${url}/health`, { timeout: HEALTH_TIMEOUT_MS });
     const ok = res.status >= 200 && res.status < 300;
     if (ok) {
       const caps = res.data?.capabilities;
@@ -144,7 +161,6 @@ export const workerHealth = async (): Promise<{
     }
     return { ok, status: res.status, data: res.data };
   } catch (error: any) {
-    // Marcar como unhealthy temporalmente
     _workerUnhealthyUntil = Date.now() + UNHEALTHY_COOLDOWN_MS;
     _cachedCapabilities = null;
     _cachedCapabilitiesAt = 0;
@@ -176,6 +192,99 @@ export const getWorkerCapabilities = async (): Promise<WorkerCapabilities | null
 };
 
 // ---------------------------------------------------------------------------
+// Download concurrency queue
+// ---------------------------------------------------------------------------
+
+const workerConcurrencyLimit = (): number => {
+  const raw = Number.parseInt(process.env.WORKER_DOWNLOAD_CONCURRENCY || '1', 10);
+  return Number.isFinite(raw) && raw > 0 ? Math.min(raw, 4) : 1;
+};
+
+let _activeWorkerDownloads = 0;
+const _workerDownloadQueue: Array<() => void> = [];
+
+const acquireWorkerSlot = (): Promise<void> => {
+  const limit = workerConcurrencyLimit();
+  if (_activeWorkerDownloads < limit) {
+    _activeWorkerDownloads++;
+    console.log('[worker/queue] start', { active: _activeWorkerDownloads, limit });
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    console.log('[worker/queue] waiting', { active: _activeWorkerDownloads, limit, queued: _workerDownloadQueue.length });
+    _workerDownloadQueue.push(() => {
+      _activeWorkerDownloads++;
+      console.log('[worker/queue] start (dequeued)', { active: _activeWorkerDownloads, limit });
+      resolve();
+    });
+  });
+};
+
+const releaseWorkerSlot = () => {
+  _activeWorkerDownloads = Math.max(0, _activeWorkerDownloads - 1);
+  const next = _workerDownloadQueue.shift();
+  if (next) {
+    next();
+  } else {
+    console.log('[worker/queue] done', { active: _activeWorkerDownloads });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Normalize worker download response — supports files[] AND legacy flat format
+// ---------------------------------------------------------------------------
+
+/**
+ * El worker universal devuelve:
+ *   { ok: true, files: [{ name, url, kind, size }], cached: boolean, source: string }
+ *
+ * Versiones viejas devolvían:
+ *   { ok: true, url: "...", audioUrl: "...", file_url: "..." }
+ *
+ * Esta función normaliza ambos formatos.
+ */
+export const normalizeWorkerResponse = (data: any): WorkerDownloadResult => {
+  const ok = data?.ok === true || data?.success === true;
+  const cached = data?.cached === true;
+  const source = String(data?.source || 'worker');
+
+  // Extraer files[] (formato nuevo)
+  const rawFiles: any[] = Array.isArray(data?.files) ? data.files : [];
+  const files: WorkerFile[] = rawFiles
+    .filter((f) => f && typeof f.url === 'string' && f.url.startsWith('http'))
+    .map((f) => ({
+      name: String(f.name || ''),
+      url: String(f.url),
+      kind: String(f.kind || 'audio'),
+      size: Number(f.size || 0),
+    }));
+
+  // Encontrar primer archivo de audio
+  const audioFile = files.find((f) => f.kind === 'audio') || files[0] || null;
+
+  // Fallback: formato plano antiguo
+  const legacyUrl =
+    typeof data?.url === 'string' && data.url.startsWith('http') ? data.url :
+    typeof data?.audioUrl === 'string' && data.audioUrl.startsWith('http') ? data.audioUrl :
+    typeof data?.file_url === 'string' && data.file_url.startsWith('http') ? data.file_url :
+    null;
+
+  const fileUrl = audioFile?.url || legacyUrl || null;
+  const filename = audioFile?.name || data?.filename || data?.name || null;
+
+  console.log('[worker/download] response shape', {
+    ok,
+    filesCount: files.length,
+    cached,
+    source,
+    fileUrl: fileUrl ? fileUrl.slice(0, 80) : null,
+    size: audioFile?.size || null,
+  });
+
+  return { ok, cached, source, files, fileUrl, filename, raw: data };
+};
+
+// ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
 
@@ -195,7 +304,6 @@ export const searchWithWorker = async (
   const q = String(query || '').trim();
   if (!q) return null;
 
-  // Verificar capability
   const caps = await getWorkerCapabilities().catch(() => null);
   if (caps?.search === false) {
     console.log('[worker/search] skipped no-capability');
@@ -257,17 +365,18 @@ export const extractWithWorker = async (
 };
 
 // ---------------------------------------------------------------------------
-// Download — Vibe fallback (siempre pide audio)
+// Download — Vibe fallback (siempre pide audio, con concurrencia limitada)
 // ---------------------------------------------------------------------------
 
 /**
  * Descarga audio para Vibe como fallback cuando Convert falla.
  * Siempre envía kind="audio" explícitamente.
+ * Usa cola de concurrencia para no saturar el worker.
  */
 export const downloadAudioWithWorker = async (
   urlInput: string,
   opts?: { format?: string; quality?: string }
-): Promise<any | null> => {
+): Promise<WorkerDownloadResult | null> => {
   if (!isWorkerEnabled()) return null;
   const url = String(urlInput || '').trim();
   if (!url) return null;
@@ -279,21 +388,39 @@ export const downloadAudioWithWorker = async (
   }
 
   const { url: baseUrl, timeoutMs } = getWorkerConfig();
+
+  await acquireWorkerSlot();
   try {
-    console.log('[worker/download] fallback start', { url, kind: 'audio' });
+    console.log('[worker/download] fallback start', { url, kind: 'audio', format: opts?.format || 'mp3' });
     const res = await axios.post(
       `${baseUrl}/download`,
       {
         url,
-        kind: 'audio',     // ← siempre explícito
+        kind: 'audio',
         format: opts?.format || 'mp3',
         quality: opts?.quality || 'medium',
       },
       { timeout: timeoutMs }
     );
-    const cached = res.data?.cached === true;
-    console.log('[worker/download] ok', { cached });
-    return res.data || null;
+
+    const norm = normalizeWorkerResponse(res.data);
+
+    if (norm.ok && norm.fileUrl) {
+      console.log('[worker/download] ok', {
+        cached: norm.cached,
+        fileUrl: norm.fileUrl.slice(0, 80),
+        size: norm.files[0]?.size || null,
+      });
+      return norm;
+    }
+
+    if (norm.ok && norm.files.length === 0) {
+      console.warn('[worker/download] empty_response', { ok: norm.ok, cached: norm.cached });
+      return null;
+    }
+
+    console.warn('[worker/download] empty_response', { ok: norm.ok, filesCount: norm.files.length });
+    return null;
   } catch (error: any) {
     console.warn('[worker/download] failed', {
       url,
@@ -301,6 +428,8 @@ export const downloadAudioWithWorker = async (
       status: error?.response?.status,
     });
     return null;
+  } finally {
+    releaseWorkerSlot();
   }
 };
 
@@ -315,11 +444,13 @@ export const downloadWithWorkerOptions = async (
     format?: string;
     quality?: string;
   }
-): Promise<any | null> => {
+): Promise<WorkerDownloadResult | null> => {
   if (!isWorkerEnabled()) return null;
   const url = String(urlInput || '').trim();
   if (!url) return null;
   const { url: baseUrl, timeoutMs } = getWorkerConfig();
+
+  await acquireWorkerSlot();
   try {
     console.log('[worker/download] start', { url, ...opts });
     const res = await axios.post(
@@ -327,9 +458,16 @@ export const downloadWithWorkerOptions = async (
       { url, kind: opts?.kind, format: opts?.format, quality: opts?.quality },
       { timeout: timeoutMs }
     );
-    const cached = res.data?.cached === true;
-    console.log('[worker/download] ok', { cached });
-    return res.data || null;
+
+    const norm = normalizeWorkerResponse(res.data);
+
+    if (norm.ok && norm.fileUrl) {
+      console.log('[worker/download] ok', { cached: norm.cached, fileUrl: norm.fileUrl.slice(0, 80) });
+      return norm;
+    }
+
+    console.warn('[worker/download] empty_response', { ok: norm.ok, filesCount: norm.files.length });
+    return null;
   } catch (error: any) {
     console.warn('[worker/download] failed', {
       url,
@@ -337,10 +475,12 @@ export const downloadWithWorkerOptions = async (
       status: error?.response?.status,
     });
     return null;
+  } finally {
+    releaseWorkerSlot();
   }
 };
 
 // Alias para compatibilidad con código existente
-export const downloadWithWorker = async (urlInput: string): Promise<any | null> => {
+export const downloadWithWorker = async (urlInput: string): Promise<WorkerDownloadResult | null> => {
   return downloadWithWorkerOptions(urlInput, { kind: 'audio', format: 'mp3' });
 };
