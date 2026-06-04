@@ -248,6 +248,24 @@ router.get('/resolve', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 // ──────────────────────────────────────────────
+// Polling State
+// ──────────────────────────────────────────────
+type JobStatus = {
+  status: 'preparing' | 'ready' | 'failed';
+  audioUrl?: string;
+  message?: string;
+};
+const downloadsStatusMap = new Map<string, JobStatus>();
+
+router.get('/status/:jobId', (req, res) => {
+  const job = downloadsStatusMap.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ ok: false, status: 'failed', message: 'Job no encontrado' });
+  }
+  return res.json({ ok: true, ...job });
+});
+
+// ──────────────────────────────────────────────
 // POST /api/downloads  →  solicita descarga
 // ──────────────────────────────────────────────
 const makeReqId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -299,22 +317,29 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
         }
         if (existingPath && fs.existsSync(existingPath)) {
           console.log(`[downloads] local-cache hit reqId=${reqId}`);
-          return res.status(200).json(toApiDownload(existing));
+          return res.status(200).json({ ok: true, status: 'ready', audioUrl: `/api/downloads/stream/${existing.id}` });
         }
       }
     }
 
-    const pending = pendingDownloads.get(pendingKey);
-    if (pending) {
-      console.log(`[downloads] pending join reqId=${reqId} youtubeId=${extractedYoutubeId || 'unknown'} mode=${mode}`);
-      const joined = await pending;
-      return res.status(joined.status).json(toApiDownload(joined.row));
+    const jobId = pendingKey;
+    const existingJob = downloadsStatusMap.get(jobId);
+    if (existingJob) {
+      console.log(`[downloads] job joined jobId=${jobId}`);
+      if (existingJob.status === 'ready') {
+        return res.status(200).json({ ok: true, status: 'ready', audioUrl: existingJob.audioUrl });
+      }
+      return res.status(202).json({ ok: true, status: 'preparing', jobId, youtubeId: extractedYoutubeId });
     }
+
+    console.log(`[downloads] job created jobId=${jobId}`);
+    downloadsStatusMap.set(jobId, { status: 'preparing' });
 
     const p = (async () => {
     let dlData: any | null = null;
     try {
       console.log(`[downloads] convert start reqId=${reqId} url=${url}`);
+      console.log(`[downloads/job] worker start reqId=${reqId} url=${url}`);
       const pyRes = await axios.post(
         `${DOWNLOADER_URL}/download`,
         { url, mode, quality },
@@ -472,14 +497,21 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     return { status: 201, row: saved };
     })();
 
-    pendingDownloads.set(pendingKey, p);
-    try {
-      const final = await p;
-      console.log(`[downloads] response reqId=${reqId} streamUrl=/api/downloads/stream/${final.row.id}`);
-      return res.status(final.status).json(toApiDownload(final.row));
-    } finally {
-      pendingDownloads.delete(pendingKey);
-    }
+    // Ejecutar en background
+    p.then((final) => {
+      console.log(`[downloads/job] ready id=${final.row.id}`);
+      downloadsStatusMap.set(jobId, { status: 'ready', audioUrl: `/api/downloads/stream/${final.row.id}` });
+    }).catch((err) => {
+      console.log(`[downloads/job] failed reason=${err.message}`);
+      downloadsStatusMap.set(jobId, { status: 'failed', message: err.message });
+    });
+
+    return res.status(202).json({
+      ok: true,
+      status: 'preparing',
+      jobId,
+      youtubeId: extractedYoutubeId
+    });
   } catch (error: any) {
     const detail = String(error?.response?.data?.detail || error?.message || 'Unknown error');
     console.error('[downloads] Error:', { reqId: makeReqId(), detail, status: error?.response?.status });

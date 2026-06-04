@@ -209,7 +209,6 @@ export function Search({ onSongPlay, currentSong, isPlaying }: SearchProps) {
           }
         } catch {}
 
-        const instantUrl = `${API_BASE}/api/downloads/stream-direct?url=${encodeURIComponent(safeUrl)}`;
         const who = d.uploader && d.uploader !== 'YouTube' && d.uploader !== 'YouTube Music' ? d.uploader : 'Internet';
         const dur = d.duration_seconds ?? 0;
         const tempSong = {
@@ -223,49 +222,17 @@ export function Search({ onSongPlay, currentSong, isPlaying }: SearchProps) {
           duration: dur ? `${Math.floor(dur / 60)}:${(dur % 60).toString().padStart(2, '0')}` : '0:00',
           imageUrl: d.thumbnail_url || '',
           image_url: d.thumbnail_url || '',
-          file_url: instantUrl,
+          file_url: safeUrl,
           source: 'youtube',
           isPlaying: true,
         };
         onSongPlay(tempSong);
         
         setTimeout(() => setLoadingId(null), 3000);
-
-        apiFetch(`/api/downloads`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ 
-            url: safeUrl, 
-            title: d.title, 
-            uploader: d.uploader, 
-            mode: 'audio', 
-            quality: settings.audioQuality, 
-            youtube_id: d.youtube_id || d.id 
-          })
-        })
-        .then(async res => {
-          if (!res.ok) return;
-          const record = await res.json();
-          if (record?.id) {
-            // El mensajero lanza la señal para que App.tsx la reciba
-            window.dispatchEvent(new CustomEvent('vns:download-ready', {
-              detail: {
-                youtubeId,
-                streamUrl: `${API_BASE}/api/downloads/stream/${record.id}`,
-                dbId: record.id,
-              }
-            }));
-          }
-        })
-        .catch(err => console.error("Background download failed", err))
-        .finally(() => {
-          setDownloadingIds(prev => {
-            const next = new Set(prev);
-            next.delete(idStr);
-            return next;
-          });
+        setDownloadingIds(prev => {
+          const next = new Set(prev);
+          next.delete(idStr);
+          return next;
         });
 
       } catch (err) {

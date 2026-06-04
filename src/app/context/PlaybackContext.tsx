@@ -325,7 +325,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     }
   };
 
-  const playSongInternal = useCallback((song: Song, playlist?: Playlist, isCrossfade = false, opts?: { userInitiated?: boolean }) => {
+  const playSongInternal = useCallback(async (song: Song, playlist?: Playlist, isCrossfade = false, opts?: { userInitiated?: boolean }) => {
     setPlaybackError(null);
     lastUserInitiatedRef.current = Boolean(opts?.userInitiated);
     if (!song?.file_url) {
@@ -576,6 +576,67 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       setPlaybackError('El audio no es accesible desde el navegador. Intenta nuevamente.');
       return;
     }
+
+    const isMyGen = () => playGenRef.current === myGen;
+    if (!finalAudioUrl || finalAudioUrl.includes('youtube.com') || finalAudioUrl.includes('youtu.be') || finalAudioUrl.includes('stream-direct')) {
+      setIsResolvingAudio(true);
+      setPlaybackError(null);
+      console.log('[playback/prepare] start');
+      try {
+        const ytId = song.youtube_id || null;
+        const dlRes = await apiFetch('/api/downloads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: ytId ? `https://www.youtube.com/watch?v=${ytId}` : (finalAudioUrl || ''),
+            title: song.title,
+            uploader: song.artist,
+            mode: 'audio',
+            youtube_id: ytId
+          })
+        });
+        const dlData = await dlRes.json().catch(() => ({}));
+        
+        if (!isMyGen()) return;
+
+        if (dlData.status === 'ready' && dlData.audioUrl) {
+          console.log('[playback/prepare] ready audioUrl=' + dlData.audioUrl);
+          finalAudioUrl = dlData.audioUrl;
+        } else if ((dlData.status === 'preparing' || dlRes?.status === 202) && dlData.jobId) {
+          console.log(`[playback/prepare] pending jobId=${dlData.jobId}`);
+          console.log('[playback/prepare] polling');
+          let attempts = 60;
+          let resolved = null;
+          while (attempts > 0 && isMyGen()) {
+            await new Promise(r => setTimeout(r, 2000));
+            const statRes = await apiFetch(`/api/downloads/status/${dlData.jobId}`);
+            const statData = await statRes.json().catch(() => null);
+            if (statData?.status === 'ready' && statData?.audioUrl) {
+              resolved = statData.audioUrl;
+              break;
+            } else if (statData?.status === 'failed') {
+              throw new Error(statData.message || 'Worker failed');
+            }
+            attempts--;
+          }
+          if (!isMyGen()) return;
+          if (!resolved) throw new Error('Timeout resolving audio');
+          console.log('[playback/prepare] ready audioUrl=' + resolved);
+          finalAudioUrl = resolved;
+        } else {
+          throw new Error('No pudimos preparar esta canción');
+        }
+        setIsResolvingAudio(false);
+      } catch (err) {
+        console.log('[playback/prepare] failed', err);
+        if (isMyGen()) {
+          setPlaybackError('No pudimos preparar esta canción. Intenta con otra.');
+          setIsResolvingAudio(false);
+        }
+        return;
+      }
+    }
+
     let audio: HTMLAudioElement;
     if (preloadedAudioRef.current && preloadedAudioRef.current.src.includes(finalAudioUrl)) {
       audio = preloadedAudioRef.current;
@@ -585,7 +646,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     }
     audioRef.current = audio;
 
-    const isMyGen = () => playGenRef.current === myGen;
+    
     let playStarted = false;
 
     const onDownloadReady = (e: Event) => {

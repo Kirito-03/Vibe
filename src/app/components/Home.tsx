@@ -389,46 +389,17 @@ export function Home({
           }
         } catch {}
 
-        // 1. Play instantly using the stream-direct endpoint
-        const instantUrl = `${API_BASE}/api/downloads/stream-direct?url=${encodeURIComponent(safeUrl)}`;
         const tempSong = {
           ...song,
-          file_url: instantUrl,
+          file_url: safeUrl,
           isPlaying: true
         };
         onSongPlay(tempSong);
-
-        // 2. Trigger background download
-        apiFetch(`/api/downloads`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ url: safeUrl, title: d.title, uploader: d.uploader, mode: 'audio', quality: 'high', youtube_id: d.youtube_id || d.id })
-        })
-          .then(async (res) => {
-            if (!res.ok) return;
-            const record = await res.json().catch(() => null);
-            if (record?.id) {
-              window.dispatchEvent(
-                new CustomEvent('vns:download-ready', {
-                  detail: {
-                    youtubeId,
-                    streamUrl: `${API_BASE}/api/downloads/stream/${record.id}`,
-                    dbId: record.id,
-                  },
-                })
-              );
-            }
-          })
-          .catch(err => console.error("Background download failed", err))
-          .finally(() => {
-            setDownloadingIds(prev => {
-              const next = new Set(prev);
-              next.delete(idStr);
-              return next;
-            });
-          });
+        setDownloadingIds(prev => {
+          const next = new Set(prev);
+          next.delete(idStr);
+          return next;
+        });
 
       } catch (err) {
         console.error(err);
@@ -652,7 +623,7 @@ export function Home({
                   file_url: (isLocal && d.id)
                     ? `${API_BASE}/api/downloads/stream/${d.id}`
                     : (d.youtube_id
-                        ? `${API_BASE}/api/downloads/stream-direct?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${d.youtube_id}`)}`
+                        ? `https://www.youtube.com/watch?v=${d.youtube_id}`
                         : d.url || ''),
                   imageUrl: d.thumbnail_url || d.image_url || '',
                   image_url: d.thumbnail_url || d.image_url || '',
