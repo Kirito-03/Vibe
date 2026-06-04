@@ -79,11 +79,13 @@ export function Profile({ user, onLogout, onProfileUpdate }: ProfileProps) {
     try {
       const r = await apiFetch('/api/user/reset-data', {
         method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ confirm: confirmText }),
       });
       const json = await r.json().catch(() => null);
       if (!r.ok) {
-        throw new Error(String(json?.error || 'reset'));
+        console.error('[reset-data] failed payload=', json);
+        throw new Error(String(json?.error || json?.code || 'reset'));
       }
       playback.reset();
       clearVnsLocalStorage();

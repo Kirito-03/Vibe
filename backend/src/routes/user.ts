@@ -19,29 +19,49 @@ const getEnvBoolLoose = (raw: unknown) => {
   return getEnvBool(typeof raw === 'string' ? raw : String(raw ?? ''));
 };
 
-const deleteCollectionDocs = async (firestore: FirebaseFirestore.Firestore, pathParts: string[], dryRun: boolean) => {
+const deleteDocsInChunks = async (firestore: FirebaseFirestore.Firestore, refs: FirebaseFirestore.DocumentReference[], chunkSize = 400) => {
+  if (refs.length === 0) return;
+  console.log(`[reset-data] delete refs total=${refs.length}`);
+  let chunkIndex = 1;
+  for (let i = 0; i < refs.length; i += chunkSize) {
+    const chunk = refs.slice(i, i + chunkSize);
+    console.log(`[reset-data] chunk ${chunkIndex} size=${chunk.length}`);
+    const batch = firestore.batch();
+    chunk.forEach(ref => batch.delete(ref));
+    try {
+      await batch.commit();
+    } catch (err: any) {
+      throw {
+        code: 'RESET_FIRESTORE_DELETE_FAILED',
+        message: 'Failed to delete chunk of firestore documents',
+        details: `chunk ${chunkIndex} failed: ${err.message}`
+      };
+    }
+    chunkIndex++;
+  }
+};
+
+const getCollectionRefs = async (firestore: FirebaseFirestore.Firestore, pathParts: string[]) => {
   const col = firestore.collection(pathParts.join('/'));
   let total = 0;
   let last: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+  const refs: FirebaseFirestore.DocumentReference[] = [];
   while (true) {
     let q = col.orderBy(admin.firestore.FieldPath.documentId()).limit(500) as FirebaseFirestore.Query;
     if (last) q = q.startAfter(last);
     const snap = await q.get();
     if (snap.empty) break;
     total += snap.size;
+    snap.docs.forEach(d => refs.push(d.ref));
     last = snap.docs[snap.docs.length - 1];
-    if (!dryRun) {
-      const batch = firestore.batch();
-      snap.docs.forEach((d) => batch.delete(d.ref));
-      await batch.commit();
-    }
   }
-  return total;
+  return { total, refs };
 };
 
-const deletePlaylistsWithTracks = async (firestore: FirebaseFirestore.Firestore, uid: string, dryRun: boolean) => {
+const getPlaylistsWithTracksRefs = async (firestore: FirebaseFirestore.Firestore, uid: string) => {
   let playlists = 0;
   let playlistItems = 0;
+  const refs: FirebaseFirestore.DocumentReference[] = [];
 
   const playlistsCol = firestore.collection(`users/${uid}/playlists`);
   let lastPlaylist: FirebaseFirestore.QueryDocumentSnapshot | null = null;
@@ -54,6 +74,7 @@ const deletePlaylistsWithTracks = async (firestore: FirebaseFirestore.Firestore,
 
     for (const p of playlistsSnap.docs) {
       playlists += 1;
+      refs.push(p.ref);
       const tracksCol = firestore.collection(`users/${uid}/playlists/${p.id}/tracks`);
       let lastTrack: FirebaseFirestore.QueryDocumentSnapshot | null = null;
       while (true) {
@@ -62,21 +83,13 @@ const deletePlaylistsWithTracks = async (firestore: FirebaseFirestore.Firestore,
         const tracksSnap = await tq.get();
         if (tracksSnap.empty) break;
         playlistItems += tracksSnap.size;
+        tracksSnap.docs.forEach(d => refs.push(d.ref));
         lastTrack = tracksSnap.docs[tracksSnap.docs.length - 1];
-        if (!dryRun) {
-          const batch = firestore.batch();
-          tracksSnap.docs.forEach((d) => batch.delete(d.ref));
-          await batch.commit();
-        }
-      }
-
-      if (!dryRun) {
-        await p.ref.delete();
       }
     }
   }
 
-  return { playlists, playlistItems };
+  return { playlists, playlistItems, refs };
 };
 
 const previewOrReset = async (req: Request, res: Response) => {
@@ -115,29 +128,40 @@ const previewOrReset = async (req: Request, res: Response) => {
     downloads: 0,
   };
 
-  console.log('[user/reset-data] start', {
-    uid,
-    dryRun,
-    postgresTables,
-    firestoreCollections,
-  });
+  console.log('[reset-data] uid=' + uid);
 
   const firestore = admin.firestore();
 
   try {
-    deleted.likes = await deleteCollectionDocs(firestore, ['users', uid, 'likes'], dryRun);
-    deleted.recent = await deleteCollectionDocs(firestore, ['users', uid, 'recents'], dryRun);
-    deleted.searchHistory = await deleteCollectionDocs(firestore, ['users', uid, 'searches'], dryRun);
+    const allRefs: FirebaseFirestore.DocumentReference[] = [];
 
-    const playlistCounts = await deletePlaylistsWithTracks(firestore, uid, dryRun);
-    deleted.playlists = playlistCounts.playlists;
-    deleted.playlistItems = playlistCounts.playlistItems;
+    const likesData = await getCollectionRefs(firestore, ['users', uid, 'likes']);
+    deleted.likes = likesData.total;
+    allRefs.push(...likesData.refs);
+
+    const recentsData = await getCollectionRefs(firestore, ['users', uid, 'recents']);
+    deleted.recent = recentsData.total;
+    allRefs.push(...recentsData.refs);
+
+    const searchesData = await getCollectionRefs(firestore, ['users', uid, 'searches']);
+    deleted.searchHistory = searchesData.total;
+    allRefs.push(...searchesData.refs);
+
+    const playlistData = await getPlaylistsWithTracksRefs(firestore, uid);
+    deleted.playlists = playlistData.playlists;
+    deleted.playlistItems = playlistData.playlistItems;
+    allRefs.push(...playlistData.refs);
 
     const settingsDocRef = firestore.doc(`users/${uid}/settings/app`);
     const settingsSnap = await settingsDocRef.get();
     deleted.settings = settingsSnap.exists ? 1 : 0;
-    if (!dryRun && settingsSnap.exists) {
-      await settingsDocRef.delete();
+    if (settingsSnap.exists) {
+      allRefs.push(settingsDocRef);
+    }
+
+    if (!dryRun) {
+      await deleteDocsInChunks(firestore, allRefs);
+      console.log('[reset-data] firestore delete ok');
     }
 
     const userRes = await pool.query('SELECT id FROM Users WHERE firebase_uid = $1 LIMIT 1', [uid]);
@@ -166,6 +190,8 @@ const previewOrReset = async (req: Request, res: Response) => {
       await pool.query('DELETE FROM UserSeenTracks WHERE firebase_uid = $1', [uid]);
       await pool.query('DELETE FROM UserRecommendationFeedback WHERE firebase_uid = $1', [uid]);
       await pool.query('DELETE FROM "UserRecommendationCache" WHERE firebase_uid = $1', [uid]);
+      console.log('[reset-data] postgres delete ok');
+      console.log('[reset-data] done');
     }
 
     res.json({
@@ -176,7 +202,11 @@ const previewOrReset = async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error('[user/reset-data] error', { uid, dryRun, message: error?.message });
-    res.status(500).json({ error: 'Failed to reset user data' });
+    if (error?.code === 'RESET_FIRESTORE_DELETE_FAILED') {
+      res.status(500).json({ ok: false, code: error.code, message: error.message, details: error.details });
+    } else {
+      res.status(500).json({ ok: false, code: 'INTERNAL_ERROR', message: 'Failed to reset user data' });
+    }
   }
 };
 
