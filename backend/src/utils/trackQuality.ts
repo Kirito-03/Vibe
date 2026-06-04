@@ -20,7 +20,33 @@ export function isLikelyMusicTrack(title: string | undefined | null, artist: str
   return true;
 }
 
-export function rankRecommendationCandidate(seedTitle: string, seedArtist: string, candidate: any): number {
+export function rankRecommendationCandidate(seedTitle: string, seedArtist: string, candidate: any, profile?: any): number {
+  let scorePenalty = 0;
+  const title = String(candidate?.title || '');
+  const artist = String(candidate?.artist || candidate?.uploader || '');
+
+  // Demote bad terms based on user input
+  const lowerTitle = title.toLowerCase();
+  if (lowerTitle.includes('exporting files') || lowerTitle.includes('luna -') || lowerTitle.includes('tutorial') || lowerTitle.includes('how to')) {
+    scorePenalty -= 100;
+  }
+  if (lowerTitle.includes('karaoke') || lowerTitle.includes('instrumental') || lowerTitle.includes('cover')) {
+    scorePenalty -= 50;
+  }
+  
+  if (profile?.topArtists?.some((a: string) => a.toLowerCase() === artist.toLowerCase())) {
+     scorePenalty += 30;
+  }
+  if (profile?.skippedPatterns?.some((p: string) => lowerTitle.includes(p.toLowerCase()))) {
+     scorePenalty -= 50;
+  }
+  if (lowerTitle.includes('live')) {
+    scorePenalty -= 20;
+  }
+  if (lowerTitle.includes('podcast') || lowerTitle.includes('episode')) {
+    scorePenalty -= 80;
+  }
+
   if (!candidate || !candidate.title) return -100;
   
   const cTitle = String(candidate.title).toLowerCase();
@@ -37,34 +63,34 @@ export function rankRecommendationCandidate(seedTitle: string, seedArtist: strin
 
   // Boost for official indicators
   if (cTitle.includes('official audio') || cTitle.includes('official video') || cTitle.includes('topic')) {
-    score += 50;
+    scorePenalty += 50;
   }
 
   // Exact artist match
   if (sArtist && cArtist && (cArtist.includes(sArtist) || sArtist.includes(cArtist))) {
-    score += 40;
+    scorePenalty += 40;
   }
 
   // Penalties for weird versions if not explicitly requested
   const weirdFlags = ['karaoke', 'instrumental', 'slowed', 'reverb', 'sped up', 'cover', 'live'];
   for (const flag of weirdFlags) {
     if (cTitle.includes(flag) && !sTitle.includes(flag)) {
-      score -= 30;
+      scorePenalty -= 30;
     }
   }
 
   // Penalize lyrics if "official audio" is available in another result (we just penalize lyrics slightly)
   if (cTitle.includes('lyrics') || cTitle.includes('letra')) {
-    score -= 10;
+    scorePenalty -= 10;
   }
 
   // Duration checks
   const duration = candidate.durationSecs || candidate.duration_seconds || 0;
   if (duration > 0) {
-    if (duration > 600) score -= 50; // > 10 mins is bad
-    if (duration < 60) score -= 50; // < 1 min is bad
-    if (duration >= 90 && duration <= 300) score += 20; // 1:30 to 5:00 is ideal
+    if (duration > 600) scorePenalty -= 50; // > 10 mins is bad
+    if (duration < 60) scorePenalty -= 50; // < 1 min is bad
+    if (duration >= 90 && duration <= 300) scorePenalty += 20; // 1:30 to 5:00 is ideal
   }
 
-  return score;
+  return score + scorePenalty;
 }

@@ -8,6 +8,7 @@ import { collection, doc, getDocs, limit, orderBy, query, serverTimestamp, setDo
 import { motion, AnimatePresence } from 'motion/react';
 import { apiFetch, apiFetchItems, API_BASE } from '../api';
 import { useAppSettings } from '../context/AppSettingsContext';
+import { usePlayback } from '../context/PlaybackContext';
 import { LoadErrorState } from './LoadErrorState';
 import { makeSafeYoutubeWatchUrl } from '../track';
 import { TrackCover } from './TrackCover';
@@ -36,14 +37,13 @@ interface SearchProps {
 
 export function Search({ onSongPlay, currentSong, isPlaying }: SearchProps) {
   const { settings } = useAppSettings();
+  const { preparingTrackKey } = usePlayback();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Download[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
-  const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
-  const [loadingId, setLoadingId] = useState<string | null>(null);
   const [lastDebug, setLastDebug] = useState<any | null>(null);
 
   const normalizeQuery = (value: string) => value.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -169,13 +169,7 @@ export function Search({ onSongPlay, currentSong, isPlaying }: SearchProps) {
     if (currentTyped.length > 0) {
       upsertRecent(currentTyped).catch(() => {});
     }
-    if (d.source === 'youtube') {
-      const idStr = String(d.id);
-      if (downloadingIds.has(idStr) || loadingId === idStr) return;
-      
-      setLoadingId(idStr);
-      setDownloadingIds(prev => new Set(prev).add(idStr));
-      try {
+    if (d.source === 'youtube') {try {
         const youtubeId = d.youtube_id || String(d.id);
         const safeUrl = makeSafeYoutubeWatchUrl(youtubeId);
         try {
@@ -199,13 +193,7 @@ export function Search({ onSongPlay, currentSong, isPlaying }: SearchProps) {
               source: 'local',
               isPlaying: true,
             });
-            setLoadingId(null);
-            setDownloadingIds((prev) => {
-              const next = new Set(prev);
-              next.delete(idStr);
-              return next;
-            });
-            return;
+return;
           }
         } catch {}
 
@@ -226,23 +214,8 @@ export function Search({ onSongPlay, currentSong, isPlaying }: SearchProps) {
           source: 'youtube',
           isPlaying: true,
         };
-        onSongPlay(tempSong);
-        
-        setTimeout(() => setLoadingId(null), 3000);
-        setDownloadingIds(prev => {
-          const next = new Set(prev);
-          next.delete(idStr);
-          return next;
-        });
-
-      } catch (err) {
-        console.error(err);
-        setDownloadingIds(prev => {
-          const next = new Set(prev);
-          next.delete(idStr);
-          return next;
-        });
-      }
+        onSongPlay(tempSong);} catch (err) {
+        console.error(err);}
     } else {
       onSongPlay(downloadToSong(d as any));
     }
@@ -359,7 +332,8 @@ export function Search({ onSongPlay, currentSong, isPlaying }: SearchProps) {
                 {searchResults.map((d) => {
                   const song = downloadToSong(d as any);
                   const isActive = currentSong?.id === song.id || (currentSong as any)?.youtube_id === d.youtube_id;
-                  const isDownloading = downloadingIds.has(String(d.id));
+                  const songKey = String((song as any).youtube_id || song.id);
+                  const isDownloading = preparingTrackKey === songKey;
                   return (
                     <div
                       key={`${d.source ?? 'local'}-${d.id}`}

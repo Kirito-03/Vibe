@@ -6,7 +6,7 @@ import { HomeHeader } from './Header';
 import { useState, useEffect, useRef } from 'react';
 import { downloadToSong } from './Downloads';
 import { Music2, Play, Pause, Clock, Library, Sparkles, TrendingUp, Disc3, ChevronLeft, ChevronRight, Loader2, RotateCw } from 'lucide-react';
-import { collection, getDocs, limit, orderBy, query } from 'firebase/firestore';
+import { collection, getDocs, limit, orderBy, query, doc, deleteDoc } from 'firebase/firestore';
 import { db, auth } from '../../firebaseConfig';
 import { apiClearRecommendationCache, apiFetch, apiFetchItems, apiMarkSeenTracks, API_BASE } from '../api';
 import { LoadErrorState } from './LoadErrorState';
@@ -14,6 +14,7 @@ import { makeSafeYoutubeWatchUrl } from '../track';
 import { TrackCover } from './TrackCover';
 import { TrackFeedbackMenu } from './TrackFeedbackMenu';
 import { useHomeData } from '../context/HomeDataContext';
+import { usePlayback } from '../context/PlaybackContext';
 
 // Trigger auto-refresh for Vite HMR
 interface Download {
@@ -51,6 +52,7 @@ export function Home({
   onExplore,
 }: HomeProps) {
   const { playlists } = useMusic();
+  const { preparingTrackKey, playSong } = usePlayback();
   const home = useHomeData();
   const randomPicks = home.forYouItems as Download[];
   const history = home.recentTracks as Song[];
@@ -127,7 +129,7 @@ export function Home({
                   artist_name: data.artist,
                   artist: data.artist,
                   duration_seconds: data.duration_seconds ?? 0,
-                  file_url: resolveMediaUrl(String(data.file_url ?? '')),
+                  file_url: resolveMediaUrl(String(data.file_url || '')),
                   url: data.url,
                   image_url: data.image_url,
                   imageUrl: data.image_url,
@@ -156,7 +158,7 @@ export function Home({
                   artist_name: best.data.artist,
                   artist: best.data.artist,
                   duration_seconds: best.data.duration_seconds ?? 0,
-                  file_url: resolveMediaUrl(String(best.data.file_url ?? '')),
+                  file_url: resolveMediaUrl(String(best.data.file_url || '')),
                   url: best.data.url,
                   image_url: best.data.image_url,
                   imageUrl: best.data.image_url,
@@ -177,7 +179,7 @@ export function Home({
         // Background deletion of corrupt docs
         if (toDelete.length > 0) {
            toDelete.forEach(id => {
-               deleteDoc(doc(db, 'users', user.uid, 'recents', id)).catch(() => {});
+               deleteDoc(doc(db, 'users', user.uid, 'recents', String(id))).catch(() => {});
            });
         }
         
@@ -391,7 +393,6 @@ export function Home({
   const showEmptyState = true; 
 
   const [loadingMore, setLoadingMore] = useState(false);
-  const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
 
   const forYouRef = useRef<HTMLDivElement | null>(null);
   const recommendationsRef = useRef<HTMLDivElement | null>(null);
@@ -420,25 +421,14 @@ export function Home({
 
     if (isLocal) {
       onSongPlay(song);
-    } else {
-      const idStr = String(d.id);
-      if (downloadingIds.has(idStr)) return;
-      
-      setDownloadingIds(prev => new Set(prev).add(idStr));
-      try {
+    } else {try {
         const youtubeId = d.youtube_id || String(d.id);
         const safeUrl = makeSafeYoutubeWatchUrl(youtubeId);
         try {
           const cacheRes = await apiFetch(`/api/downloads/resolve?youtube_id=${encodeURIComponent(youtubeId)}&mode=audio`);
           const cacheJson = cacheRes.ok ? await cacheRes.json().catch(() => null) : null;
           if (cacheJson?.cached && cacheJson?.audioUrl) {
-            onSongPlay({ ...song, file_url: String(cacheJson.audioUrl) });
-            setDownloadingIds(prev => {
-              const next = new Set(prev);
-              next.delete(idStr);
-              return next;
-            });
-            return;
+            onSongPlay({ ...song, file_url: String(cacheJson.audioUrl) });return;
           }
         } catch {}
 
@@ -447,21 +437,8 @@ export function Home({
           file_url: safeUrl,
           isPlaying: true
         };
-        onSongPlay(tempSong);
-        setDownloadingIds(prev => {
-          const next = new Set(prev);
-          next.delete(idStr);
-          return next;
-        });
-
-      } catch (err) {
-        console.error(err);
-        setDownloadingIds(prev => {
-          const next = new Set(prev);
-          next.delete(idStr);
-          return next;
-        });
-      }
+        onSongPlay(tempSong);} catch (err) {
+        console.error(err);}
     }
   };
   const handleScroll = (e: React.UIEvent<HTMLDivElement>, type: 'foryou' | 'recommendations') => {
@@ -600,16 +577,25 @@ export function Home({
 
         {/* ── Música Aleatoria de la Base de Datos ── */}
         <section className="mb-8 md:mb-12">
+          
           <div className="flex items-center justify-between mb-4 md:mb-6">
-            <h3 className="text-xl md:text-2xl font-bold text-white">
-              Música para ti
-              {import.meta.env.DEV && forYouSource && (
-                <span className="ml-2 text-[10px] font-medium text-white/40">
-                  source: {forYouSource}
-                </span>
+            <div>
+              <h3 className="text-xl md:text-2xl font-bold text-white flex items-center gap-2">
+                Música para ti
+                {import.meta.env.DEV && forYouSource && (
+                  <span className="ml-2 text-[10px] font-medium text-white/40">
+                    source: {forYouSource}
+                  </span>
+                )}
+              </h3>
+              {history.length > 0 && (
+                <p className="text-xs text-white/50 mt-1">
+                  Basado en lo que escuchas recientemente
+                </p>
               )}
-            </h3>
+            </div>
             <div className="hidden md:flex gap-2">
+
               <button
                 onClick={() => refreshRecommendations()}
                 className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white transition-colors"
@@ -687,7 +673,8 @@ export function Home({
                 } as Song;
                 
                 const isActive = currentSong?.id === song.id;
-                const isDownloading = downloadingIds.has(String(d.id));
+                const songKey = String(song.youtube_id || song.id);
+                const isDownloading = preparingTrackKey === songKey;
 
                 return (
                   <div
@@ -841,7 +828,8 @@ export function Home({
                 } as Song;
                 
                 const isActive = currentSong?.id === song.id;
-                const isDownloading = downloadingIds.has(String(d.id));
+                const songKey = String(song.youtube_id || song.id);
+                const isDownloading = preparingTrackKey === songKey;
 
                 return (
                   <div

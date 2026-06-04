@@ -25,6 +25,8 @@ import {
   markUserSeenTracks,
   saveRecommendationFeedback,
   saveUserRecommendationCache,
+  saveUserListeningEvent,
+  buildUserMusicProfile,
   upsertGlobalCatalogTracks,
 } from '../services/recommendationStore';
 
@@ -960,16 +962,26 @@ router.get('/for-you', asyncHandler(async (req, res) => {
         .map(([name]) => name)
         .slice(0, 6);
 
+      
+      let builtProfile: any = null;
+      try {
+        builtProfile = await buildUserMusicProfile(uid);
+      } catch (err) {
+        console.error('[music/for-you] buildUserMusicProfile failed', err);
+      }
+
       profile = {
         userId: uid,
-        topArtists,
+        topArtists: builtProfile?.topArtists || topArtists,
         topGenres: [],
         recentTracks: recentTracks.slice(0, 10),
-        likedTracks: likedTracks.slice(0, 10),
+        likedTracks: builtProfile?.likedTracks?.length ? builtProfile.likedTracks : likedTracks.slice(0, 10),
         recentSearches: recentSearches.slice(0, 10),
         currentTrack,
         preferredLanguage: 'es',
-      };
+        skippedPatterns: builtProfile?.skippedPatterns || []
+      } as any;
+
 
       if (positiveSeeds.length > 0) {
         const positiveOnly = positiveSeeds.slice(0, 3);
@@ -977,7 +989,7 @@ router.get('/for-you', asyncHandler(async (req, res) => {
       }
 
       const localQs = candidates.map((c) => c.q);
-      const aiQueries = await generateMusicSeedsWithDeepSeek(profile).catch(() => null);
+      const aiQueries = await generateMusicSeedsWithDeepSeek(profile as any).catch(() => null);
       const merged = mixQueries(localQs, aiQueries, 20);
       if (aiQueries && aiQueries.length > 0) {
         const localLower = new Set(localQs.map((q) => q.toLowerCase()));
@@ -1007,7 +1019,7 @@ router.get('/for-you', asyncHandler(async (req, res) => {
           ...(positiveSeeds || []),
           ...Array.from(blockedArtists).map((a) => `!a:${a}`),
           ...Array.from(blockedTrackKeys).map((t) => `!t:${t}`),
-          ...(profile.recentSearches || []),
+          ...(profile?.recentSearches || []),
         ].slice(0, 30),
       };
       profileHash = computeMusicProfileHash(profileForHash);

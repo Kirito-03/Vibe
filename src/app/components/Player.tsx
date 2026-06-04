@@ -38,6 +38,8 @@ export function Player({
     repeatMode,
     favorites,
     playbackError,
+    playbackErrorTrackKey,
+    preparingTrackKey,
     togglePlay: onTogglePlay,
     next: onNext,
     previous: onPrev,
@@ -127,7 +129,11 @@ export function Player({
               {title}
             </p>
             {artist && <p className="text-xs text-zinc-500 truncate">{artist}</p>}
-            {playbackError && <p className="text-[11px] text-zinc-400 truncate">{playbackError}</p>}
+            {playbackErrorTrackKey === (song?.youtube_id || song?.id) && playbackError ? (
+              <p className="text-[11px] text-zinc-400 truncate">{playbackError}</p>
+            ) : preparingTrackKey === String(song?.youtube_id || song?.id) ? (
+              <p className="text-[11px] text-violet-400 truncate">Preparando audio...</p>
+            ) : null}
           </button>
 
           <button
@@ -174,7 +180,11 @@ export function Player({
               {title}
             </p>
             {artist && <p className="text-xs text-zinc-500 truncate">{artist}</p>}
-            {playbackError && <p className="text-[11px] text-zinc-400 truncate">{playbackError}</p>}
+            {playbackErrorTrackKey === (song?.youtube_id || song?.id) && playbackError ? (
+              <p className="text-[11px] text-zinc-400 truncate">{playbackError}</p>
+            ) : preparingTrackKey === String(song?.youtube_id || song?.id) ? (
+              <p className="text-[11px] text-violet-400 truncate">Preparando audio...</p>
+            ) : null}
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             <button

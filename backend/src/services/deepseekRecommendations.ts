@@ -7,6 +7,7 @@ export type MusicTasteProfile = {
   topGenres?: string[];
   recentTracks?: string[];
   likedTracks?: string[];
+  skippedPatterns?: string[];
   recentSearches?: string[];
   currentTrack?: { title?: string; artist?: string } | null;
   preferredLanguage?: string;
@@ -39,6 +40,7 @@ export const computeMusicProfileHash = (profile: MusicTasteProfile) => {
     topGenres: Array.isArray(profile.topGenres) ? profile.topGenres.slice(0, 10) : [],
     recentTracks: Array.isArray(profile.recentTracks) ? profile.recentTracks.slice(0, 15) : [],
     likedTracks: Array.isArray(profile.likedTracks) ? profile.likedTracks.slice(0, 15) : [],
+    skippedPatterns: Array.isArray(profile.skippedPatterns) ? profile.skippedPatterns.slice(0, 15) : [],
     recentSearches: Array.isArray(profile.recentSearches) ? profile.recentSearches.slice(0, 15) : [],
     currentTrack: profile.currentTrack ? { title: profile.currentTrack.title, artist: profile.currentTrack.artist } : null,
     preferredLanguage: profile.preferredLanguage || '',
@@ -204,6 +206,7 @@ export const generateMusicSeedsWithDeepSeek = async (profile: MusicTasteProfile)
     topGenres,
     recentTracks,
     likedTracks,
+    skippedPatterns: Array.isArray(profile.skippedPatterns) ? profile.skippedPatterns : [],
     recentSearches,
     currentTrack: profile.currentTrack || null,
   });

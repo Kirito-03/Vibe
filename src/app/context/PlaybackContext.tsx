@@ -104,8 +104,9 @@ type PlaybackContextValue = {
   shuffle: boolean;
   favorites: Set<string>;
   playbackError: string | null;
-  isResolvingAudio: boolean;
-  resolvingTrackKey: string | null;
+  preparingTrackKey: string | null;
+  playingTrackKey: string | null;
+  playbackErrorTrackKey: string | null;
 
   playSong: (song: Song, playlist?: Playlist, isCrossfade?: boolean) => void;
   playTrack: (track: Track, opts?: { queue?: Track[] }) => void;
@@ -195,7 +196,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       console.log(`[playback/user-change] from=${prevUserRef.current} to=${currentUid}`);
       pause();
       setCurrentSong(null);
-      setQueue([]);
+      setCurrentPlaylist(null);
     }
     prevUserRef.current = currentUid;
   }, [user?.uid]);
@@ -208,7 +209,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       if (k) console.log(`[storage] key=${getUserStorageKey('vns_lastPlayed', user?.uid)}`);
       if (k) {
         const data = safeJsonParse<PersistedPlaybackState>(localStorage.getItem(k));
-        if (data?.currentTrack && (!data.currentTrack.youtube_id && !data.currentTrack.sourceId && !data.currentTrack.url)) {
+        if (data?.currentTrack && (!(data.currentTrack as any).youtube_id && !data.currentTrack.sourceId && !(data.currentTrack as any).url)) {
            // Si no tiene fuente válida, mejor limpiar este state corrupto en vez de arrastrarlo.
            console.log('[playback/rehydrate] clearing stale local track', data.currentTrack);
            localStorage.removeItem(k);
@@ -245,8 +246,11 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   const [progress, setProgress] = useState(0);
   const [sleepTimerRemainingSec, setSleepTimerRemainingSec] = useState<number | null>(null);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
-  const [isResolvingAudio, setIsResolvingAudio] = useState(false);
-  const [resolvingTrackKey, setResolvingTrackKey] = useState<string | null>(null);
+  const [preparingTrackKey, setPreparingTrackKey] = useState<string | null>(null);
+  const [playingTrackKey, setPlayingTrackKey] = useState<string | null>(null);
+  const [playbackErrorTrackKey, setPlaybackErrorTrackKey] = useState<string | null>(null);
+  
+  const currentPrepareRequestRef = useRef<string | null>(null);
 
   const duration = currentSong?.durationSecs ?? currentSong?.duration_seconds ?? 0;
 
@@ -260,6 +264,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   const preloadedAudioRef = useRef<HTMLAudioElement | null>(null);
   const playGenRef = useRef(0);
   const autoplayBusyRef = useRef(false);
+  const sentEventsRef = useRef<Record<string, Set<string>>>({});
   const playedIdsRef = useRef<Set<string>>(new Set());
   const repairAttemptsRef = useRef<Map<string, number>>(new Map());
   const lastUserInitiatedRef = useRef(false);
@@ -358,7 +363,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   const seek = useCallback((newProgress: number) => {
     setProgress(newProgress);
     if (audioRef.current && audioRef.current.duration) {
-      audioRef.current.currentTime = (newProgress / 100) * audioRef.current.duration;
+      if (audioRef.current) if (audioRef.current) audioRef.current.currentTime = (newProgress / 100) * audioRef.current.duration;
     }
   }, []);
 
@@ -419,11 +424,15 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
 
   const toggleFavoriteSong = useCallback((song: Song) => {
     setPlaybackError(null);
+      setPlaybackErrorTrackKey(null);
+    emitListeningEvent(song, 'play_start');
     void handleLike(song.id);
   }, [handleLike]);
 
   const toggleFavorite = useCallback((track: Track) => {
     setPlaybackError(null);
+      setPlaybackErrorTrackKey(null);
+    emitListeningEvent(song, 'play_start');
     const legacyId = currentTrack?.id === track.id && currentSong ? currentSong.id : track.sourceId ?? track.id;
     void handleLike(legacyId);
   }, [currentSong, currentTrack, handleLike]);
@@ -597,29 +606,59 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
       return null;
     }
   };
+  
+  const emitListeningEvent = useCallback((song: Song | Track | null, eventType: string) => {
+    if (!song || !user) return;
+    const key = (song as any).youtube_id || song.id;
+    if (!key) return;
+
+    if (!sentEventsRef.current[key]) sentEventsRef.current[key] = new Set();
+    if (sentEventsRef.current[key].has(eventType)) return;
+    sentEventsRef.current[key].add(eventType);
+
+    const progress = audioRef.current?.currentTime || 0;
+    const duration = audioRef.current?.duration || song.duration_seconds || song.duration || 0;
+    const progressPercent = duration > 0 ? Math.round((progress / duration) * 100) : 0;
+
+    apiFetch('/api/music/listening-event', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        youtubeId: (song as any).youtube_id || (song.source === 'youtube' ? song.id : null),
+        title: song.title,
+        artist: song.artist || song.artist_name || null,
+        duration: duration || null,
+        listenedSeconds: Math.round(progress) || null,
+        progressPercent: progressPercent || null,
+        eventType,
+        source: 'home'
+      })
+    }).catch(() => {});
+  }, [user]);
+
   const playSongInternal = useCallback(async (song: Song, playlist?: Playlist, isCrossfade = false, opts?: { userInitiated?: boolean, forcePlay?: boolean, fromQueueNavigation?: boolean }) => {
     setPlaybackError(null);
+      setPlaybackErrorTrackKey(null);
+    emitListeningEvent(song, 'play_start');
+    setPlaybackErrorTrackKey(null);
+    emitListeningEvent(song, 'play_start');
     lastUserInitiatedRef.current = Boolean(opts?.userInitiated);
-    if (!song?.file_url) {
-      setPlaybackError('No hay audio disponible para reproducir esta canción.');
-      return;
-    }
-
+    
     const songKey = String(song.youtube_id || song.id);
 
-    // Prevent double-clicks triggering multiple requests for the same track
-    if (opts?.userInitiated && isResolvingAudio && resolvingTrackKey === songKey) {
-      return;
+    if (!song?.file_url) {
+      setPlaybackError('No hay audio disponible para reproducir esta canción.');
+      setPlaybackErrorTrackKey(songKey);
+      setPreparingTrackKey(null);
+            return;
     }
 
+    // Generate Request ID for cancellation
+    const requestId = crypto.randomUUID();
+    currentPrepareRequestRef.current = requestId;
+
     if (opts?.userInitiated) {
-      setIsResolvingAudio(true);
-      setResolvingTrackKey(songKey);
-      // Timeout fallback to clear the resolving state
-      setTimeout(() => {
-        setIsResolvingAudio(false);
-        setResolvingTrackKey(null);
-      }, 10000);
+      setPreparingTrackKey(songKey);
     }
 
     if (import.meta.env.DEV) console.debug('[playback/playSong] song', song);
@@ -782,7 +821,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
           }
         }, 250);
       } else {
-        audioRef.current.pause();
+        audioRef.current?.pause();
         audioRef.current.src = '';
         audioRef.current = null;
         if (oldAudioRef.current) {
@@ -856,12 +895,14 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
 
     const isMyGen = () => playGenRef.current === myGen;
     if (!finalAudioUrl || finalAudioUrl.includes('youtube.com') || finalAudioUrl.includes('youtu.be') || finalAudioUrl.includes('stream-direct')) {
-      setIsResolvingAudio(true);
+      
       setPlaybackError(null);
+      setPlaybackErrorTrackKey(null);
+    emitListeningEvent(song, 'play_start');
       console.log('[playback/prepare] start');
       try {
-        const ytId = cleanSourceValue(song.youtube_id || song.sourceId || song.videoId);
-        const url = cleanSourceValue(song.url || song.webpage_url);
+        const ytId = cleanSourceValue(song.youtube_id || (song as any).sourceId || (song as any).videoId);
+        const url = cleanSourceValue((song as any).url || (song as any).webpage_url);
         const audioUrl = cleanSourceValue(song.file_url);
         
         if (!ytId && !url || ytId === 'null' || (url && url.includes('watch?v=null'))) {
@@ -878,7 +919,8 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
            console.log('[playback/prepare] clearing corrupt item');
            if (isMyGen()) {
              setPlaybackError('Esta canción está corrupta. Búscala nuevamente.');
-             setIsResolvingAudio(false);
+            setPlaybackErrorTrackKey(songKey);
+             
            }
            return;
         }
@@ -896,7 +938,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
         });
         let dlData = await dlRes.json().catch(() => null);
         
-        if (!isMyGen()) return;
+        if (!isMyGen() || currentPrepareRequestRef.current !== requestId) return;
 
         if (!dlRes.ok) {
           const error: any = new Error(dlData?.message || "No pudimos preparar esta canción");
@@ -931,14 +973,14 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
             }
             attempts--;
           }
-          if (!isMyGen()) return;
+          if (!isMyGen() || currentPrepareRequestRef.current !== requestId) return;
           if (!resolved) throw new Error('Timeout resolving audio');
           console.log('[playback/prepare] ready audioUrl=' + resolved);
           finalAudioUrl = resolved;
         } else {
           throw new Error('No pudimos preparar esta canción');
         }
-        setIsResolvingAudio(false);
+        
       } catch (err: any) {
         console.debug("[playback/prepare] error payload", {
           status: err?.status,
@@ -965,7 +1007,8 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
         console.log('[playback/prepare] failed', err);
         if (isMyGen()) {
           setPlaybackError('No pudimos preparar esta canción. Intenta con otra.');
-          setIsResolvingAudio(false);
+          setPlaybackErrorTrackKey(songKey);
+          
         }
         return;
       }
@@ -985,14 +1028,14 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
 
     const onDownloadReady = (e: Event) => {
       const ev = e as CustomEvent;
-      if (!isMyGen()) return;
+      if (!isMyGen() || currentPrepareRequestRef.current !== requestId) return;
       const eventYtId = String((ev as any).detail?.youtubeId || '');
       const songYtId = String(song.youtube_id || song.id || '');
       if (!eventYtId || !songYtId || eventYtId !== songYtId) return;
       const localUrl: string = (ev as any).detail?.streamUrl;
       
-      setIsResolvingAudio(false);
-      setResolvingTrackKey(null);
+      
+      
 
       if (!localUrl || audio.src?.includes('/stream/')) return;
       const wasPlaying = !audio.paused;
@@ -1029,29 +1072,31 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     audio.addEventListener('pause', () => { if (isMyGen()) setIsPlaying(false); });
 
     const doPlay = () => {
-      if (playStarted || !isMyGen()) return;
+      if (playStarted || !isMyGen() || currentPrepareRequestRef.current !== requestId) return;
       if (import.meta.env.DEV) console.debug('[playback/audio.play] start');
       audio
         .play()
         .then(() => {
           if (import.meta.env.DEV) console.debug('[playback/audio.play] ok');
-          if (isMyGen()) {
+          if (isMyGen() && currentPrepareRequestRef.current === requestId) {
             playStarted = true;
             setIsPlaying(true);
+            setPlayingTrackKey(songKey);
+            setPreparingTrackKey(null);
           }
         })
         .catch((error) => {
           if (import.meta.env.DEV) console.debug('[playback/audio.play] error', error);
-          if (isMyGen()) {
+          if (isMyGen() && currentPrepareRequestRef.current === requestId) {
             setIsPlaying(false);
+            setPreparingTrackKey(null);
             setPlaybackError('No pudimos reproducir esta canción. Intenta con otra.');
+            setPlaybackErrorTrackKey(songKey);
           }
         });
     };
 
     audio.addEventListener('canplay', () => {
-      setIsResolvingAudio(false);
-      setResolvingTrackKey(null);
       if (!playStarted && isMyGen()) doPlay();
     }, { once: true });
 
@@ -1066,7 +1111,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
       isRecovering = true;
       repairingRef.current = true;
       setIsPlaying(false);
-      setIsResolvingAudio(true);
+      
       // setPlaybackError('No pudimos reproducir esta canción. Intentando repararla...');
 
       try {
@@ -1075,6 +1120,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
         const prevAttempts = repairAttemptsRef.current.get(repairKey) || 0;
         if (prevAttempts >= maxRepairAttemptsPerTrack) {
           setPlaybackError('No pudimos reproducir esta canción. Intenta con otra.');
+            setPlaybackErrorTrackKey(songKey);
           if (!lastUserInitiatedRef.current && settings.autoplay) next();
           try {
             const lp = JSON.parse(localStorage.getItem('vns_lastPlayed') || '{}');
@@ -1085,6 +1131,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
         if (!song.title && !song.artist && !song.artist_name) {
            console.log('[resolve-audio] blocked empty title/artist');
            setPlaybackError('Esta canción está corrupta. Búscala nuevamente.');
+            setPlaybackErrorTrackKey(songKey);
            if (!lastUserInitiatedRef.current && settings.autoplay) next();
            try {
              const lp = JSON.parse(localStorage.getItem('vns_lastPlayed') || '{}');
@@ -1114,6 +1161,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
         const repairedAudioUrl = String(repairJson?.audioUrl || '').trim();
         if (!isMyGen() || !repairRes.ok || !repairJson?.ok || !repairedAudioUrl) {
           setPlaybackError('No pudimos reproducir esta canción. Intenta con otra.');
+            setPlaybackErrorTrackKey(songKey);
           if (!lastUserInitiatedRef.current && settings.autoplay) next();
           return;
         }
@@ -1144,12 +1192,14 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
           return prev;
         });
         setPlaybackError(null);
+      setPlaybackErrorTrackKey(null);
+    emitListeningEvent(song, 'play_start');
         doPlay();
       } finally {
         isRecovering = false;
         repairingRef.current = false;
-        setIsResolvingAudio(false);
-        setResolvingTrackKey(null);
+        
+        
       }
     });
 
@@ -1310,7 +1360,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
       const state = playerStateRef.current;
 
       if (state.repeatMode === 'one' && audioRef.current) {
-        audioRef.current.currentTime = 0;
+        if (audioRef.current) if (audioRef.current) audioRef.current.currentTime = 0;
         audioRef.current.play().catch(() => setIsPlaying(false));
         return;
       }
@@ -1418,7 +1468,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
         thumbnail_url: song.imageUrl ?? song.image_url ?? null,
         filename: song.file_url?.split('/').pop() ?? '',
         mode: 'audio',
-        youtube_id: song.youtube_id || song.sourceId || null,
+        youtube_id: song.youtube_id || (song as any).sourceId || null,
       }));
     } catch {}
   }, [currentSong, isPlaying, isTooSimilar, resolveMediaUrl, settings.audioQuality, settings.autoplay, toStorableFileUrl, volume]);
@@ -1491,7 +1541,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
             const candidateIdx = (idx + i) % list.length;
             const candidate = list[candidateIdx];
             if (getTrackKey(candidate) !== currentKey) {
-               if (isAutoEnded && repeatMode === 'none' && candidateIdx <= idx) {
+               if (isAutoEnded && repeatMode === 'off' && candidateIdx <= idx) {
                   // We wrapped around and repeat is none. Stop playback.
                   break;
                }
@@ -1518,8 +1568,8 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     const list = currentPlaylist?.songs;
     if (!list || !currentSong) return;
 
-    if (audioRef.current && audioRef.current.currentTime > 3) {
-      audioRef.current.currentTime = 0;
+    if (audioRef.current && audioRef.current?.currentTime > 3) {
+      if (audioRef.current) if (audioRef.current) audioRef.current.currentTime = 0;
       return;
     }
 
@@ -1550,13 +1600,15 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     if (prevSong) {
        playSong(prevSong, currentPlaylist, false, { forcePlay: true, fromQueueNavigation: true });
     } else {
-       audioRef.current.currentTime = 0;
+       if (audioRef.current) if (audioRef.current) audioRef.current.currentTime = 0;
        audioRef.current.play().catch(() => {});
     }
   }, [currentPlaylist, currentSong, playSong, shuffle]);
 
   const reorderQueue = useCallback((tracks: Track[]) => {
     setPlaybackError(null);
+      setPlaybackErrorTrackKey(null);
+    emitListeningEvent(song, 'play_start');
     setCurrentPlaylist((prev) => {
       const base: Playlist = prev || { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: [] };
       let songs = tracks.map(songFromTrack);
@@ -1575,6 +1627,8 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
 
   const removeFromQueue = useCallback((index: number) => {
     setPlaybackError(null);
+      setPlaybackErrorTrackKey(null);
+    emitListeningEvent(song, 'play_start');
     setCurrentPlaylist((prev) => {
       if (!prev?.songs) return prev;
       const songs = [...prev.songs];
@@ -1597,6 +1651,8 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
 
   const addToQueue = useCallback((track: Track) => {
     setPlaybackError(null);
+      setPlaybackErrorTrackKey(null);
+    emitListeningEvent(song, 'play_start');
     setCurrentPlaylist((prev) => {
       const base: Playlist = prev || { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: currentSong ? [currentSong] : [] };
       return { ...base, songs: [...(base.songs || []), songFromTrack(track)] };
@@ -1605,6 +1661,8 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
 
   const clearQueue = useCallback(() => {
     setPlaybackError(null);
+      setPlaybackErrorTrackKey(null);
+    emitListeningEvent(song, 'play_start');
     setCurrentPlaylist((prev) => {
       const base: Playlist = prev || { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: [] };
       return { ...base, songs: currentSong ? [currentSong] : [] };
@@ -1613,6 +1671,8 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
 
   const playTrack = useCallback((track: Track, opts?: { queue?: Track[] }) => {
     setPlaybackError(null);
+      setPlaybackErrorTrackKey(null);
+    emitListeningEvent(song, 'play_start');
     if (!track.audioUrl) {
       setPlaybackError('No hay audio disponible para reproducir esta canción.');
       return;
@@ -1627,6 +1687,8 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
 
   const reset = useCallback(() => {
     setPlaybackError(null);
+      setPlaybackErrorTrackKey(null);
+    emitListeningEvent(song, 'play_start');
     clearSleepTimer();
     autoplayBusyRef.current = false;
     expandingQueueRef.current = false;
@@ -1634,7 +1696,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     playedIdsRef.current = new Set();
 
     if (audioRef.current) {
-      audioRef.current.pause();
+      audioRef.current?.pause();
       audioRef.current.src = '';
       audioRef.current = null;
     }
@@ -1880,8 +1942,10 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     shuffle,
     favorites,
     playbackError,
-    isResolvingAudio,
-    resolvingTrackKey,
+    preparingTrackKey,
+      playingTrackKey,
+      playbackErrorTrackKey,
+    
     playSong,
     playTrack,
     pause,
@@ -1907,7 +1971,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     currentPlaylist,
   }), [
     currentTrack, queue, isPlaying, volume, progress, duration, repeatMode,
-    shuffle, favorites, playbackError, isResolvingAudio, resolvingTrackKey, playSong, playTrack, pause,
+    shuffle, favorites, playbackError, preparingTrackKey, playingTrackKey, playbackErrorTrackKey, playSong, playTrack, pause,
     resume, next, previous, seek, toggleFavorite, toggleFavoriteSong, addToQueue,
     removeFromQueue, clearQueue, setSleepTimer, setVolume, togglePlay,
     toggleShuffle, cycleRepeat, reorderQueue, playNextFromQueueIndex, reset,
