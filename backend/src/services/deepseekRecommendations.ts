@@ -258,3 +258,27 @@ export const generateMusicSeedsWithDeepSeek = async (profile: MusicTasteProfile)
     clearTimeout(timer);
   }
 };
+
+
+export const buildPersonalizedSeeds = (profile: any, maxQueries = 12) => {
+  const raw: string[] = [];
+  const artists = Array.isArray(profile?.topArtists) ? profile.topArtists : [];
+  const genres = Array.isArray(profile?.topGenres) ? profile.topGenres : [];
+  const recentTracks = Array.isArray(profile?.recentTracks) ? profile.recentTracks : [];
+  const likedTracks = Array.isArray(profile?.likedTracks) ? profile.likedTracks : [];
+  
+  if (artists.length > 0) {
+    raw.push(`${artists[0]} hits official audio`);
+    raw.push(`${artists[0]} official audio`);
+    if (artists.length > 1) raw.push(`${artists[1]} official audio`);
+    if (artists.length > 2) raw.push(`similar to ${artists[0]} ${artists[1]} official audio`);
+  }
+  
+  for (const t of recentTracks.slice(0, 3)) raw.push(`${t} official audio`);
+  for (const t of likedTracks.slice(0, 3)) raw.push(`${t} official audio`);
+  for (const g of genres.slice(0, 2)) raw.push(`${g} official audio`);
+
+  if (profile?.currentTrack?.artist) raw.push(`${profile.currentTrack.artist} official audio`);
+
+  return dedupeAndLimit(raw, Math.max(1, maxQueries)) as string[];
+};

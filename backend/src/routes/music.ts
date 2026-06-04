@@ -6,7 +6,7 @@ import path from 'path';
 import { admin } from '../firebase';
 import type { ItemsResponse, ItemsSource } from '../utils/response';
 import { downloadWithWorkerOptions, isWorkerEnabled, isWorkerSearchEnabled, searchWithWorker, workerHealth } from '../services/mediaWorkerClient';
-import { computeMusicProfileHash, generateMusicSeedsWithDeepSeek, mixQueries, type MusicTasteProfile } from '../services/deepseekRecommendations';
+import { computeMusicProfileHash, generateMusicSeedsWithDeepSeek, mixQueries, buildPersonalizedSeeds, type MusicTasteProfile } from '../services/deepseekRecommendations';
 import { getSearchQueryAlternatives } from '../services/searchAiAssist';
 import { normalizeSearchQuery, normalizeText as normalizeSearchText, rankSearchResults } from '../services/searchRanking';
 import { rerankWithDeepSeek, isSearchRerankEnabled } from '../services/searchDeepseekRerank';
@@ -754,12 +754,11 @@ router.get('/for-you', asyncHandler(async (req, res) => {
   const refresh = String((req.query as any)?.refresh || '').trim() === '1' || String((req.query as any)?.refresh || '').trim().toLowerCase() === 'true';
 
   const defaultForYouTerms = [
-    'karol g official audio',
-    'anuel aa official audio',
-    'bad bunny official audio',
-    'anime opening song',
-    'lofi beats',
-    'reggaeton',
+    'latin pop official audio',
+    'reggaeton hits official audio',
+    'pop music official audio',
+    'anime music official audio',
+    'lofi beats official audio',
   ];
 
   try {
@@ -983,12 +982,19 @@ router.get('/for-you', asyncHandler(async (req, res) => {
       } as any;
 
 
+      
       if (positiveSeeds.length > 0) {
         const positiveOnly = positiveSeeds.slice(0, 3);
         candidates.splice(0, 0, ...positiveOnly.map((q) => ({ q, source: 'personalized' as ItemsSource })));
       }
 
+      const pSeeds = buildPersonalizedSeeds(profile);
+      for (const s of pSeeds) {
+         candidates.push({ q: s, source: 'personalized' });
+      }
+
       const localQs = candidates.map((c) => c.q);
+
       const aiQueries = await generateMusicSeedsWithDeepSeek(profile as any).catch(() => null);
       const merged = mixQueries(localQs, aiQueries, 20);
       if (aiQueries && aiQueries.length > 0) {
