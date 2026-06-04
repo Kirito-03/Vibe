@@ -15,6 +15,7 @@ import { AddToPlaylistModal } from './components/AddToPlaylistModal';
 import { Playlist } from './context/MusicContext';
 import { usePlayback } from './context/PlaybackContext';
 import { useDocumentTitle } from './hooks/useDocumentTitle';
+import { getUserStorageKey } from './utils';
 
 type ViewType = 'home' | 'search' | 'library' | 'profile' | 'playlist';
 type LibraryTab = 'playlists' | 'recientes' | 'favoritos';
@@ -39,13 +40,27 @@ export const AppShell = ({ user, onLogout, onProfileUpdate }: AppShellProps) => 
   const [showContinueListening, setShowContinueListening] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem('vns_lastPlayed');
-    if (!saved) return;
+    if (!user?.uid) {
+      setResumeCandidate(null);
+      setShowContinueListening(false);
+      return;
+    }
+    const lpKey = getUserStorageKey('vns_lastPlayed', user.uid);
+    if (!lpKey) return;
+    const saved = localStorage.getItem(lpKey);
+    if (!saved) {
+      setResumeCandidate(null);
+      setShowContinueListening(false);
+      return;
+    }
     try {
       setResumeCandidate(JSON.parse(saved));
       setShowContinueListening(true);
-    } catch {}
-  }, []);
+    } catch {
+      setResumeCandidate(null);
+      setShowContinueListening(false);
+    }
+  }, [user?.uid]);
 
   const dismissContinueListening = useCallback(() => {
     setShowContinueListening(false);

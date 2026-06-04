@@ -76,7 +76,9 @@ export const getTrackKey = (track: any): string => {
   return `txt:${cleanTitle}|${cleanArtist}|${track.duration_seconds || 0}`;
 };
 import {
-  cleanSourceValue, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+  cleanSourceValue,
+  getUserStorageKey,
+  cleanupLegacyPlaybackStorage, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { User } from 'firebase/auth';
 import { CapacitorMusicControls } from 'capacitor-music-controls-plugin';
 import { collection, deleteDoc, doc, getDocs, serverTimestamp, setDoc } from 'firebase/firestore';
@@ -183,8 +185,28 @@ type PlaybackProviderProps = {
 };
 
 export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
+  useEffect(() => {
+    cleanupLegacyPlaybackStorage();
+  }, []);
+  const prevUserRef = useRef<string | null>(null);
+  useEffect(() => {
+    const currentUid = user?.uid || null;
+    if (prevUserRef.current !== null && prevUserRef.current !== currentUid) {
+      console.log(`[playback/user-change] from=${prevUserRef.current} to=${currentUid}`);
+      pause();
+      setCurrentSong(null);
+      setQueue([]);
+    }
+    prevUserRef.current = currentUid;
+  }, [user?.uid]);
+
+
   const { settings } = useAppSettings();
-  const persisted = useMemo(() => safeJsonParse<PersistedPlaybackState>(localStorage.getItem(STORAGE_KEY)), []);
+  const persisted = useMemo(() => {
+    const k = getUserStorageKey(STORAGE_KEY, user?.uid);
+    if (k) console.log(`[storage] key=${getUserStorageKey('vns_lastPlayed', user?.uid)}`);
+    return k ? safeJsonParse<PersistedPlaybackState>(localStorage.getItem(k)) : null;
+  }, [user?.uid]);
 
   const [shuffle, setShuffle] = useState<boolean>(persisted?.shuffle ?? false);
   const [repeatMode, setRepeatMode] = useState<RepeatMode>(persisted?.repeatMode ?? 'off');
@@ -330,7 +352,8 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
 
   const persistState = useCallback((state: PersistedPlaybackState) => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      const k = getUserStorageKey(STORAGE_KEY, user?.uid);
+      if (k) localStorage.setItem(k, JSON.stringify(state));
     } catch {}
   }, []);
 
@@ -515,7 +538,11 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
          if (currentUser && track.id) {
              // We can delete the old one or just let it be. But we must return the new one.
              const key = songKeyFromId(track.id);
-             deleteDoc(doc(db, 'users', currentUser.uid, 'recents', key)).catch(() => {});
+             try {
+               deleteDoc(doc(db, 'users', currentUser.uid, 'recents', key)).catch(() => {});
+             } catch (e) {
+               console.warn('[playback/repair] firestore error ignored', e);
+             }
              
              try {
                const saved = localStorage.getItem('vns_recents');
@@ -595,7 +622,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
             .catch((error) => {
               if (import.meta.env.DEV) console.debug('[playback/audio.play] error (toggle)', error);
               setIsPlaying(false);
-              setPlaybackError('No pudimos reproducir esta canción. Intenta con otra.');
+              // don't set error yet, let onerror listener handle repair
             });
         } else {
           a.pause();
@@ -766,24 +793,28 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
          } catch {}
       }
 
-      setDoc(doc(db, 'users', currentUser.uid, 'recents', key), {
-        id: key,
-        song_id: song.id,
-        title: song.title,
-        artist: song.artist_name ?? song.artist ?? null,
-        duration_seconds: song.duration_seconds ?? null,
-        image_url: song.image_url ?? song.imageUrl ?? null,
-        coverUrl: song.image_url ?? song.imageUrl ?? null,
-        file_url: toStorableFileUrl(song.file_url),
-        audioUrl: toStorableFileUrl(song.file_url),
-        url: ytUrl || song.file_url || null,
-        youtube_id: ytId,
-        youtubeId: ytId,
-        sourceId: ytId ?? song.id ?? null,
-        videoId: ytId,
-        source: song.source ?? 'youtube',
-        played_at: serverTimestamp(),
-      }, { merge: true }).catch(() => {});
+      try {
+        setDoc(doc(db, 'users', currentUser.uid, 'recents', key), {
+          id: key,
+          song_id: song.id,
+          title: song.title,
+          artist: song.artist_name ?? song.artist ?? null,
+          duration_seconds: song.duration_seconds ?? null,
+          image_url: song.image_url ?? song.imageUrl ?? null,
+          coverUrl: song.image_url ?? song.imageUrl ?? null,
+          file_url: toStorableFileUrl(song.file_url),
+          audioUrl: toStorableFileUrl(song.file_url),
+          url: ytUrl || song.file_url || null,
+          youtube_id: ytId,
+          youtubeId: ytId,
+          sourceId: ytId ?? song.id ?? null,
+          videoId: ytId,
+          source: song.source ?? 'youtube',
+          played_at: serverTimestamp(),
+        }, { merge: true }).catch(() => {});
+      } catch (e) {
+        console.warn('[playback/recents] firestore error ignored', e);
+      }
     }
 
     const resolvedUrl = resolveMediaUrl(song.file_url);
@@ -1021,7 +1052,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
       repairingRef.current = true;
       setIsPlaying(false);
       setIsResolvingAudio(true);
-      setPlaybackError('No pudimos reproducir esta canción. Intentando repararla...');
+      // setPlaybackError('No pudimos reproducir esta canción. Intentando repararla...');
 
       try {
         const maxRepairAttemptsPerTrack = 1;
@@ -1032,7 +1063,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
           if (!lastUserInitiatedRef.current && settings.autoplay) next();
           try {
             const lp = JSON.parse(localStorage.getItem('vns_lastPlayed') || '{}');
-            if (lp.id === song.id || String(lp.id) === String(song.id)) localStorage.removeItem('vns_lastPlayed');
+            if (lp.id === song.id || String(lp.id) === String(song.id)) if (user?.uid) localStorage.removeItem(getUserStorageKey('vns_lastPlayed', user.uid)!);
           } catch {}
           return;
         }
@@ -1042,7 +1073,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
            if (!lastUserInitiatedRef.current && settings.autoplay) next();
            try {
              const lp = JSON.parse(localStorage.getItem('vns_lastPlayed') || '{}');
-             if (lp.id === song.id || String(lp.id) === String(song.id)) localStorage.removeItem('vns_lastPlayed');
+             if (lp.id === song.id || String(lp.id) === String(song.id)) if (user?.uid) localStorage.removeItem(getUserStorageKey('vns_lastPlayed', user.uid)!);
            } catch {}
            return;
         }
@@ -1606,7 +1637,8 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     setCurrentSong(null);
     setCurrentPlaylist(null);
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      const k = getUserStorageKey(STORAGE_KEY, user?.uid);
+      if (k) localStorage.removeItem(k);
     } catch {}
   }, [clearSleepTimer]);
 
@@ -1692,10 +1724,11 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
          (ptrack.url && ptrack.url.includes('watch?v=null'))
       ) {
          console.log('[playback/rehydrate] clearing invalid saved track');
-         localStorage.removeItem('vns_lastPlayed');
+         if (user?.uid) localStorage.removeItem(getUserStorageKey('vns_lastPlayed', user.uid)!);
          const state = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
          state.currentTrack = null;
-         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+         const k = getUserStorageKey(STORAGE_KEY, user?.uid);
+      if (k) localStorage.setItem(k, JSON.stringify(state));
          return;
       }
       
@@ -1732,7 +1765,17 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
           
           let finalUrl = null;
           if (dlData?.status === 'ready' && dlData?.audioUrl) {
-            finalUrl = dlData.audioUrl;
+            try {
+              const check = await fetch(dlData.audioUrl, { method: 'HEAD' });
+              if (check.status === 404) {
+                 console.log('[playback/rehydrate] old stream failed, repairing');
+                 throw new Error('stream_404');
+              }
+              finalUrl = dlData.audioUrl;
+            } catch (e: any) {
+              if (e.message === 'stream_404') throw e;
+              finalUrl = dlData.audioUrl;
+            }
           } else if ((dlData?.status === 'preparing' || dlRes?.status === 202) && dlData?.jobId) {
             let attempts = 60;
             while (attempts > 0 && active) {
@@ -1771,11 +1814,14 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
           const repaired = await repairTrack(s);
           if (!repaired) {
              console.log('[playback/rehydrate] failed clearing lastPlayed');
-             localStorage.removeItem('vns_lastPlayed');
+             if (user?.uid) localStorage.removeItem(getUserStorageKey('vns_lastPlayed', user.uid)!);
              const state = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
              state.currentTrack = null;
-             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+             const k = getUserStorageKey(STORAGE_KEY, user?.uid);
+      if (k) localStorage.setItem(k, JSON.stringify(state));
              setCurrentSong(null);
+             console.log('[playback/rehydrate] clearing broken lastPlayed');
+             if (user?.uid) localStorage.removeItem(getUserStorageKey('vns_lastPlayed', user.uid)!);
              setPlaybackError('Busca la canción nuevamente');
           } else if (active && !audioRef.current) {
              setCurrentSong(repaired);
@@ -1787,11 +1833,14 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
         const repaired = await repairTrack(s);
         if (!repaired) {
              console.log('[playback/rehydrate] failed clearing lastPlayed');
-             localStorage.removeItem('vns_lastPlayed');
+             if (user?.uid) localStorage.removeItem(getUserStorageKey('vns_lastPlayed', user.uid)!);
              const state = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
              state.currentTrack = null;
-             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+             const k = getUserStorageKey(STORAGE_KEY, user?.uid);
+      if (k) localStorage.setItem(k, JSON.stringify(state));
              setCurrentSong(null);
+             console.log('[playback/rehydrate] clearing broken lastPlayed');
+             if (user?.uid) localStorage.removeItem(getUserStorageKey('vns_lastPlayed', user.uid)!);
              setPlaybackError('Busca la canción nuevamente');
         } else if (active && !audioRef.current) {
              setCurrentSong(repaired);
