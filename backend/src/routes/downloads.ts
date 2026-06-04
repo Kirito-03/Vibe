@@ -648,12 +648,16 @@ router.get('/stream/:id', async (req: Request, res: Response) => {
     }
 
     if (!fs.existsSync(filePath)) {
+      console.warn(`[downloads] Auto-cleaning broken DB entry ${id} (file not found: ${filePath})`);
+      await pool.query('DELETE FROM Downloads WHERE id = $1', [id]).catch(() => {});
       return res.status(404).json({ ok: false, code: 'FILE_MISSING', message: 'Audio file missing' });
     }
 
     const stat = fs.statSync(filePath);
     const fileSize = stat.size;
     if (!fileSize || fileSize <= 0) {
+      console.warn(`[downloads] Auto-cleaning broken DB entry ${id} (file size 0: ${filePath})`);
+      await pool.query('DELETE FROM Downloads WHERE id = $1', [id]).catch(() => {});
       return res.status(404).json({ ok: false, code: 'FILE_MISSING', message: 'Audio file missing' });
     }
     const ext = path.extname(filePath).toLowerCase();

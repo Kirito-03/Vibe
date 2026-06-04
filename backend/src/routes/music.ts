@@ -2051,14 +2051,29 @@ router.get('/search', asyncHandler(async (req, res) => {
     return '';
   };
 
-  const localResults = localRows.map((row) => ({
-    ...row,
-    youtube_id: inferYoutubeIdFromLocal(row) || row.youtube_id,
-    artist: row.uploader,
-    duration_seconds: row.duration,
-    thumbnail_url: row.thumbnail,
-    source: 'local',
-  }));
+  const localResults = localRows.reduce((acc: any[], row) => {
+    const youtube_id = inferYoutubeIdFromLocal(row) || row.youtube_id;
+    if (!youtube_id && row.url && typeof row.url === 'string' && row.url.includes('youtube_')) return acc; // Exclude broken local refs
+    
+    if (row.url && !/^https?:\/\//i.test(row.url)) {
+      try {
+        const fp = path.resolve(row.url);
+        if (!fs.existsSync(fp) || fs.statSync(fp).size <= 0) return acc; // Exclude missing files
+      } catch {
+        return acc;
+      }
+    }
+
+    acc.push({
+      ...row,
+      youtube_id,
+      artist: row.uploader,
+      duration_seconds: row.duration,
+      thumbnail_url: row.thumbnail,
+      source: 'local',
+    });
+    return acc;
+  }, []);
 
   const localKeys = new Set(localResults.map((loc: any) => `${normalizeSearchText(loc.title)}::${normalizeSearchText(loc.artist)}`));
   const localYoutubeIds = new Set(localResults.map((loc: any) => loc.youtube_id).filter(Boolean));

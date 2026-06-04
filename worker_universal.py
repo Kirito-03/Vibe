@@ -277,7 +277,7 @@ def _detect_tools() -> Tuple[bool, Optional[str], bool]:
     try:
         r = subprocess.run(
             [sys.executable, "-m", "yt_dlp", "--version"],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, timeout=1
         )
         ytdlp_ok = r.returncode == 0
         ytdlp_version = (r.stdout or "").strip() if ytdlp_ok else None
@@ -378,7 +378,15 @@ def _save_index(index: Dict[str, Any]) -> None:
         return
 
 
+_stats_cache = (0, 0)
+_stats_cache_ts = 0
+
 def _downloads_stats() -> Tuple[int, int]:
+    global _stats_cache, _stats_cache_ts
+    now = _now()
+    if now - _stats_cache_ts < 60:
+        return _stats_cache
+
     try:
         if not DOWNLOADS_DIR.exists():
             return 0, 0
@@ -391,9 +399,11 @@ def _downloads_stats() -> Tuple[int, int]:
                     size += int(p.stat().st_size)
                 except Exception:
                     pass
+        _stats_cache = (count, size)
+        _stats_cache_ts = now
         return count, size
     except Exception:
-        return 0, 0
+        return _stats_cache
 
 
 # ---------------------------------------------------------------------------

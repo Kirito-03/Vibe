@@ -681,6 +681,10 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
         if (prevAttempts >= maxRepairAttemptsPerTrack) {
           setPlaybackError('No pudimos reproducir esta canción. Intenta con otra.');
           if (!lastUserInitiatedRef.current && settings.autoplay) next();
+          try {
+            const lp = JSON.parse(localStorage.getItem('vns_lastPlayed') || '{}');
+            if (lp.id === song.id || String(lp.id) === String(song.id)) localStorage.removeItem('vns_lastPlayed');
+          } catch {}
           return;
         }
         repairAttemptsRef.current.set(repairKey, prevAttempts + 1);
@@ -722,10 +726,12 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
 
         audio.src = finalRepairedAudioUrl;
         audio.load();
+        console.log(`[playback/repair] replacing old stream old=${song.file_url} new=${repairedAudioUrl}`);
         setCurrentSong((prev) => {
           if (prev && prev.id === song.id) {
             return {
               ...prev,
+              id: repairJson?.track?.id || prev.id,
               file_url: toStorableFileUrl(repairedAudioUrl),
               youtube_id: repairJson?.track?.youtubeId || prev.youtube_id,
             };
@@ -1005,6 +1011,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
         thumbnail_url: song.imageUrl ?? song.image_url ?? null,
         filename: song.file_url?.split('/').pop() ?? '',
         mode: 'audio',
+        youtube_id: song.youtube_id || song.sourceId || null,
       }));
     } catch {}
   }, [currentSong, isPlaying, isTooSimilar, resolveMediaUrl, settings.audioQuality, settings.autoplay, toStorableFileUrl, volume]);
