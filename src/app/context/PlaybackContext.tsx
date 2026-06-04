@@ -188,7 +188,16 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   const [shuffle, setShuffle] = useState<boolean>(persisted?.shuffle ?? false);
   const [repeatMode, setRepeatMode] = useState<RepeatMode>(persisted?.repeatMode ?? 'off');
   const [volume, setVolumeState] = useState<number>(persisted?.volume ?? 70);
-  const [currentSong, setCurrentSong] = useState<Song | null>(() => (persisted?.currentTrack ? songFromTrack(persisted.currentTrack) : null));
+  const [currentSong, setCurrentSong] = useState<Song | null>(() => {
+    if (persisted?.currentTrack) {
+       const s = songFromTrack(persisted.currentTrack);
+       if (s.file_url && !s.file_url.includes('stream-direct')) {
+           s.file_url = '';
+       }
+       return s;
+    }
+    return null;
+  });
   const [currentPlaylist, setCurrentPlaylist] = useState<Playlist | null>(() => {
     const tracks = persisted?.queue ?? [];
     if (!tracks.length) return persisted?.currentTrack ? { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: [songFromTrack(persisted.currentTrack)] } : null;
@@ -1311,7 +1320,13 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio) {
+      if (currentSong) {
+        console.log('[playback] togglePlay missing audio, prepare via internal');
+        playSongInternal(currentSong, currentPlaylist ?? undefined, false, { forcePlay: true });
+      }
+      return;
+    }
     if (!audio.paused) {
       audio.pause();
       return;
@@ -1595,6 +1610,116 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       CapacitorMusicControls.updateIsPlaying({ isPlaying });
     } catch {}
   }, [isPlaying]);
+
+  
+  useEffect(() => {
+    let active = true;
+    const rehydrate = async () => {
+      const savedPlayback = localStorage.getItem(STORAGE_KEY);
+      if (!savedPlayback) return;
+      let parsed = null;
+      try { parsed = JSON.parse(savedPlayback); } catch {}
+      if (!parsed?.currentTrack) return;
+      
+      if (audioRef.current) return;
+      
+      console.log('[playback/rehydrate] start');
+      const track = parsed.currentTrack;
+      const ytId = track.youtube_id || track.sourceId;
+      const url = track.url || track.file_url;
+      
+      if (ytId || url) {
+        console.log(`[playback/rehydrate] has source youtubeId=${ytId || url}`);
+        console.log('[playback/rehydrate] prepare start');
+        try {
+          const reqUrl = ytId ? `https://www.youtube.com/watch?v=${ytId}` : (url || '');
+          let dlRes = await apiFetch('/api/downloads', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: reqUrl,
+              title: track.title,
+              uploader: track.artist || track.artist_name,
+              mode: 'audio',
+              youtube_id: ytId
+            })
+          });
+          let dlData = await dlRes.json().catch(() => null);
+          
+          if (!active) return;
+          if (!dlRes.ok) throw dlData;
+          if (ytId && dlData?.youtubeId && dlData.youtubeId !== ytId) {
+             throw { status: 400, code: 'MISSING_TRACK_SOURCE' };
+          }
+          
+          let finalUrl = null;
+          if (dlData?.status === 'ready' && dlData?.audioUrl) {
+            finalUrl = dlData.audioUrl;
+          } else if ((dlData?.status === 'preparing' || dlRes?.status === 202) && dlData?.jobId) {
+            let attempts = 60;
+            while (attempts > 0 && active) {
+              await new Promise(r => setTimeout(r, 2000));
+              const statRes = await apiFetch(`/api/downloads/status/${dlData.jobId}`);
+              const statData = await statRes.json().catch(() => null);
+              if (statData?.status === 'ready' && statData?.audioUrl) {
+                finalUrl = statData.audioUrl;
+                break;
+              } else if (statData?.status === 'failed') {
+                throw new Error('failed');
+              }
+              attempts--;
+            }
+          }
+          
+          if (!active) return;
+          if (finalUrl) {
+            console.log('[playback/rehydrate] ready audioUrl=' + finalUrl);
+            if (!audioRef.current) {
+                const s = songFromTrack(track);
+                s.file_url = finalUrl;
+                setCurrentSong(s);
+                audioRef.current = new Audio(finalUrl);
+            }
+          } else {
+            throw new Error('timeout');
+          }
+        } catch (err) {
+          console.log('[playback/rehydrate] missing-source repair');
+          const s = songFromTrack(track);
+          const repaired = await repairTrack(s);
+          if (!repaired) {
+             console.log('[playback/rehydrate] failed clearing lastPlayed');
+             localStorage.removeItem('vns_lastPlayed');
+             const state = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+             state.currentTrack = null;
+             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+             setCurrentSong(null);
+             setPlaybackError('Busca la canción nuevamente');
+          } else if (active && !audioRef.current) {
+             setCurrentSong(repaired);
+          }
+        }
+      } else {
+        console.log('[playback/rehydrate] missing-source repair');
+        const s = songFromTrack(track);
+        const repaired = await repairTrack(s);
+        if (!repaired) {
+             console.log('[playback/rehydrate] failed clearing lastPlayed');
+             localStorage.removeItem('vns_lastPlayed');
+             const state = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+             state.currentTrack = null;
+             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+             setCurrentSong(null);
+             setPlaybackError('Busca la canción nuevamente');
+        } else if (active && !audioRef.current) {
+             setCurrentSong(repaired);
+        }
+      }
+    };
+    
+    const t = setTimeout(rehydrate, 1500);
+    return () => { active = false; clearTimeout(t); };
+  }, []);
 
   const value: PlaybackContextValue = useMemo(() => ({
     currentTrack,

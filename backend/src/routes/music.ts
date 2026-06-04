@@ -1173,6 +1173,46 @@ router.get('/for-you', asyncHandler(async (req, res) => {
       } catch {}
     }
 
+    
+    if (finalHealed.length === 0) {
+      console.log('[home] empty-profile using fallback fetch');
+      const fallbackQueries = [
+        "latin pop official audio",
+        "new music official audio",
+        "reggaeton hits official audio",
+        "anime music official audio",
+        "pop music official audio"
+      ];
+      const randomQuery = fallbackQueries[Math.floor(Math.random() * fallbackQueries.length)];
+      try {
+        const fallbackRes = await searchDuckDuckGoForYoutube(randomQuery, 25);
+        finalHealed = adaptYouTubeRows(fallbackRes, new Set(), new Set());
+        if (finalHealed.length > 0) finalSource = 'fallback' as any;
+      } catch (err) {
+        console.warn('[home] fallback search failed', err);
+      }
+    }
+
+    
+    if (finalHealed.length === 0) {
+      console.log('[home/for-you] empty-profile using fallback fetch');
+      const fallbackQueries = [
+        "latin pop official audio",
+        "new music official audio",
+        "reggaeton hits official audio",
+        "anime music official audio",
+        "pop music official audio"
+      ];
+      const randomQuery = fallbackQueries[Math.floor(Math.random() * fallbackQueries.length)];
+      try {
+        const fallbackRes = await searchDuckDuckGoForYoutube(randomQuery, 25);
+        finalHealed = adaptYouTubeRows(fallbackRes, new Set(), new Set());
+        if (finalHealed.length > 0) finalSource = 'fallback' as any;
+      } catch (err) {
+        console.warn('[home/for-you] fallback search failed', err);
+      }
+    }
+
     finalHealed = rankRecommendationResults({ seed: rawSeed || usedQuery, items: finalHealed, profile });
 
     const response: any = {
