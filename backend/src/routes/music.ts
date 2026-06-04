@@ -1977,7 +1977,7 @@ router.get('/lyrics', asyncHandler(async (req, res) => {
       res.status(500).json({ error: 'Error fetching lyrics' });
     }
   }
-});
+}));
 
 router.get('/worker-health', asyncHandler(async (_req, res) => {
   try {
@@ -1987,7 +1987,7 @@ router.get('/worker-health', asyncHandler(async (_req, res) => {
     console.error('[music/worker-health] error', error?.message || error);
     res.json({ enabled: isWorkerEnabled(), ok: false, status: 0 });
   }
-});
+}));
 
 // ── Search: busca en Downloads (datos reales de la DB) y en YouTube ──
 router.get('/search', asyncHandler(async (req, res) => {
@@ -2311,7 +2311,7 @@ router.get('/search', asyncHandler(async (req, res) => {
     if (isDev()) response.debug = { query: rawQuery, normalized: nq.normalized, error: serializeError(error), ms: Date.now() - startedAt };
     return res.json(response);
   }
-});
+}));
 
 
 // ── GET playlists reales ──
