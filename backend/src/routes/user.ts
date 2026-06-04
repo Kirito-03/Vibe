@@ -101,7 +101,12 @@ const previewOrReset = async (req: Request, res: Response) => {
     getEnvBoolLoose((req.body as any)?.dryRun);
 
   if (!dryRun) {
-    const confirm = String((req.body as any)?.confirm || '').trim();
+    const confirm = String(
+      (req.body as any)?.confirm || 
+      (req.query as any)?.confirm || 
+      req.headers['x-reset-confirm'] || 
+      ''
+    ).trim();
     if (confirm !== CONFIRM_TEXT) {
       return res.status(400).json({ error: 'Missing or invalid confirm', required: CONFIRM_TEXT });
     }
@@ -215,5 +220,6 @@ router.post('/reset-data/preview', asyncHandler((req: Request, res: Response) =>
   return previewOrReset(req, res);
 }));
 router.delete('/reset-data', asyncHandler(previewOrReset));
+router.post('/reset-data/execute', asyncHandler(previewOrReset));
 
 export default router;

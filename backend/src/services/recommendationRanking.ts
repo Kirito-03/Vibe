@@ -1,5 +1,6 @@
 import type { MusicTasteProfile } from './deepseekRecommendations';
 import { normalizeText } from './searchRanking';
+import { isLikelyMusicTrack } from '../utils/trackQuality';
 
 export type RecommendationItemLike = {
   id?: string | number | null;
@@ -57,11 +58,13 @@ export const rankRecommendationResults = <T extends RecommendationItemLike>(opts
 
     if (/\bofficial\s+(audio|music\s+video)\b/i.test(titleNorm)) score += 3;
     if (String(it?.thumbnail_url || it?.thumbnail || '').trim()) score += 2;
+    
+    if (!isLikelyMusicTrack(it.title, it.artist)) score -= 1000;
 
     return { it, score, titleNorm, artistNorm };
   });
 
   scored.sort((a, b) => b.score - a.score);
-  return scored.map((s) => s.it);
+  return scored.filter(s => s.score > -500).map((s) => s.it);
 };
 

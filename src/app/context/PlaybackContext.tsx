@@ -87,6 +87,7 @@ import { apiFetch, API_BASE } from '../api';
 import { downloadToSong } from '../components/Downloads';
 import { trackFromSong, makeSafeYoutubeWatchUrl } from '../track';
 import { isNativePlatform } from '../utils/platform';
+import { isLikelyMusicTrack, rankRecommendationCandidate } from '../utils/trackQuality';
 import type { Song, Track } from '../types';
 import { auth, db } from '../../firebaseConfig';
 
@@ -205,7 +206,17 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     try {
       const k = getUserStorageKey(STORAGE_KEY, user?.uid);
       if (k) console.log(`[storage] key=${getUserStorageKey('vns_lastPlayed', user?.uid)}`);
-      return k ? safeJsonParse<PersistedPlaybackState>(localStorage.getItem(k)) : null;
+      if (k) {
+        const data = safeJsonParse<PersistedPlaybackState>(localStorage.getItem(k));
+        if (data?.currentTrack && (!data.currentTrack.youtube_id && !data.currentTrack.sourceId && !data.currentTrack.url)) {
+           // Si no tiene fuente válida, mejor limpiar este state corrupto en vez de arrastrarlo.
+           console.log('[playback/rehydrate] clearing stale local track', data.currentTrack);
+           localStorage.removeItem(k);
+           return null;
+        }
+        return data;
+      }
+      return null;
     } catch (err) {
       console.warn("[storage] failed", err);
       return null;
@@ -1321,25 +1332,27 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
               autoplayBusyRef.current = true;
               try {
                 const artist = state.currentSong.artist || state.currentSong.artist_name || '';
-                const seedQuery = artist && artist !== 'Internet' && artist !== 'Desconocido' ? `${artist} mix canciones` : `${state.currentSong.title} mix`;
+                const title = state.currentSong.title || '';
+                const seedQuery = artist && artist !== 'Internet' && artist !== 'Desconocido' 
+                  ? `${artist} ${title} similar songs` 
+                  : `${title} similar music`;
+                  
                 const res = await apiFetch(`/api/music/recommendations?seed=${encodeURIComponent(seedQuery)}`);
                 if (res.ok) {
                   const json = await res.json().catch(() => null);
                   const data: any[] = Array.isArray(json) ? json : Array.isArray((json as any)?.items) ? (json as any).items : [];
                   const currentPlaylistIds = new Set(state.currentPlaylist?.songs?.map((s) => String(s.id)) || []);
-                  const artistLower = artist.toLowerCase();
                   let newSongs = Array.isArray(data) ? data.filter((d) => !currentPlaylistIds.has(String(d.id))) : [];
-                  let strictSongs = newSongs.filter((d) => !isTooSimilar(d.title, state.currentSong!.title));
-                  if (strictSongs.length === 0) strictSongs = newSongs;
-                  newSongs = strictSongs;
-
+                  
                   if (newSongs.length > 0) {
-                    const filteredByArtist = newSongs.filter((d) => {
-                      if (!artistLower || artistLower === 'internet' || artistLower === 'desconocido') return true;
-                      const dArtist = (d.artist || d.uploader || '').toLowerCase();
-                      return dArtist.includes(artistLower) || artistLower.includes(dArtist) || !dArtist.includes('podcast');
-                    });
-                    if (filteredByArtist.length > 0) newSongs = filteredByArtist;
+                    const scored = newSongs.map((it: any) => ({
+                       ...it,
+                       _score: rankRecommendationCandidate(title, artist, it)
+                    }))
+                    .filter((it: any) => it._score > -50 && !isTooSimilar(it.title, title))
+                    .sort((a: any, b: any) => b._score - a._score);
+                    
+                    if (scored.length > 0) newSongs = scored;
                   }
 
                   if (newSongs.length > 0) {
