@@ -75,7 +75,8 @@ export const getTrackKey = (track: any): string => {
   const cleanArtist = (track.artist || track.artist_name || '').toLowerCase().trim();
   return `txt:${cleanTitle}|${cleanArtist}|${track.duration_seconds || 0}`;
 };
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  cleanSourceValue, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { User } from 'firebase/auth';
 import { CapacitorMusicControls } from 'capacitor-music-controls-plugin';
 import { collection, deleteDoc, doc, getDocs, serverTimestamp, setDoc } from 'firebase/firestore';
@@ -786,12 +787,33 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       setPlaybackError(null);
       console.log('[playback/prepare] start');
       try {
-        const ytId = song.youtube_id || null;
+        const ytId = cleanSourceValue(song.youtube_id || song.sourceId || song.videoId);
+        const url = cleanSourceValue(song.url || song.webpage_url);
+        const audioUrl = cleanSourceValue(song.file_url);
+        
+        if (!ytId && !url) {
+           console.log('[playback/prepare] invalid source cleaned');
+           if (song.title && (song.artist || song.artist_name)) {
+              console.debug(`[playback/repair] start reason=MISSING_TRACK_SOURCE_CLIENT`);
+              const repairedSong = await repairTrack(song);
+              if (repairedSong && isMyGen()) {
+                playSongInternal(repairedSong, playlist, isCrossfade, opts);
+                return;
+              }
+           }
+           console.log('[playback/prepare] clearing corrupt item');
+           if (isMyGen()) {
+             setPlaybackError('Esta canciA3n estA! corrupta. BAsÊla nuevamente.');
+             setIsResolvingAudio(false);
+           }
+           return;
+        }
+        
         let dlRes = await apiFetch('/api/downloads', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            url: ytId ? `https://www.youtube.com/watch?v=${ytId}` : (finalAudioUrl || ''),
+            url: ytId ? `https://www.youtube.com/watch?v=${ytId}` : (url || audioUrl || ''),
             title: song.title,
             uploader: song.artist,
             mode: 'audio',
@@ -1621,12 +1643,22 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       try { parsed = JSON.parse(savedPlayback); } catch {}
       if (!parsed?.currentTrack) return;
       
+      const ptrack = parsed.currentTrack;
+      if (ptrack.id === 'dl-null' || ptrack.audioUrl === '/api/downloads/stream/null' || ptrack.youtubeId === 'null') {
+         console.log('[playback/rehydrate] invalid saved track clearing');
+         localStorage.removeItem('vns_lastPlayed');
+         const state = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+         state.currentTrack = null;
+         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+         return;
+      }
+      
       if (audioRef.current) return;
       
       console.log('[playback/rehydrate] start');
       const track = parsed.currentTrack;
-      const ytId = track.youtube_id || track.sourceId;
-      const url = track.url || track.file_url;
+      const ytId = cleanSourceValue(track.youtube_id || track.sourceId);
+      const url = cleanSourceValue(track.url || track.file_url);
       
       if (ytId || url) {
         console.log(`[playback/rehydrate] has source youtubeId=${ytId || url}`);
@@ -1637,7 +1669,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              url: reqUrl,
+              url: ytId ? `https://www.youtube.com/watch?v=${ytId}` : (url || ''),
               title: track.title,
               uploader: track.artist || track.artist_name,
               mode: 'audio',

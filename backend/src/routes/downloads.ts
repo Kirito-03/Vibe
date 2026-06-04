@@ -1,3 +1,13 @@
+
+const cleanSourceValue = (value: any): string | null => {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim();
+  if (s === '' || s === 'null' || s === 'undefined' || s === 'NaN' || s === 'dl-null' || s === '/api/downloads/stream/null' || s.endsWith('/stream/null') || s.includes('watch?v=null')) {
+    return null;
+  }
+  return s;
+};
+
 import { Router, Request, Response } from 'express';
 import pool from '../db';
 import fs from 'fs';
