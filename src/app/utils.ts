@@ -29,18 +29,4 @@ export const cleanSourceValue = (value: any): string | null => {
   return s;
 };
 
-export const getUserStorageKey = (baseKey: string, uid?: string | null): string | null => {
-  if (!uid) return null;
-  return `${baseKey}:${uid}`;
-};
 
-export const cleanupLegacyPlaybackStorage = () => {
-  try {
-    console.log('[storage] cleanup legacy global keys');
-    localStorage.removeItem('vns_lastPlayed');
-    localStorage.removeItem('vns_playback_state_v1');
-    localStorage.removeItem('vns_playback_state');
-    localStorage.removeItem('vns_queue');
-    localStorage.removeItem('vns_resumeCandidate');
-  } catch (e) {}
-};

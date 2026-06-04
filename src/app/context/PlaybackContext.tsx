@@ -75,10 +75,9 @@ export const getTrackKey = (track: any): string => {
   const cleanArtist = (track.artist || track.artist_name || '').toLowerCase().trim();
   return `txt:${cleanTitle}|${cleanArtist}|${track.duration_seconds || 0}`;
 };
-import {
-  cleanSourceValue,
-  getUserStorageKey,
-  cleanupLegacyPlaybackStorage, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { getUserStorageKey, cleanupLegacyPlaybackStorage } from '../userStorage';
+import { cleanSourceValue } from '../utils';
 import type { User } from 'firebase/auth';
 import { CapacitorMusicControls } from 'capacitor-music-controls-plugin';
 import { collection, deleteDoc, doc, getDocs, serverTimestamp, setDoc } from 'firebase/firestore';
@@ -203,9 +202,14 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
 
   const { settings } = useAppSettings();
   const persisted = useMemo(() => {
-    const k = getUserStorageKey(STORAGE_KEY, user?.uid);
-    if (k) console.log(`[storage] key=${getUserStorageKey('vns_lastPlayed', user?.uid)}`);
-    return k ? safeJsonParse<PersistedPlaybackState>(localStorage.getItem(k)) : null;
+    try {
+      const k = getUserStorageKey(STORAGE_KEY, user?.uid);
+      if (k) console.log(`[storage] key=${getUserStorageKey('vns_lastPlayed', user?.uid)}`);
+      return k ? safeJsonParse<PersistedPlaybackState>(localStorage.getItem(k)) : null;
+    } catch (err) {
+      console.warn("[storage] failed", err);
+      return null;
+    }
   }, [user?.uid]);
 
   const [shuffle, setShuffle] = useState<boolean>(persisted?.shuffle ?? false);

@@ -15,7 +15,7 @@ import { AddToPlaylistModal } from './components/AddToPlaylistModal';
 import { Playlist } from './context/MusicContext';
 import { usePlayback } from './context/PlaybackContext';
 import { useDocumentTitle } from './hooks/useDocumentTitle';
-import { getUserStorageKey } from './utils';
+import { getUserStorageKey } from './userStorage';
 
 type ViewType = 'home' | 'search' | 'library' | 'profile' | 'playlist';
 type LibraryTab = 'playlists' | 'recientes' | 'favoritos';
@@ -45,9 +45,14 @@ export const AppShell = ({ user, onLogout, onProfileUpdate }: AppShellProps) => 
       setShowContinueListening(false);
       return;
     }
-    const lpKey = getUserStorageKey('vns_lastPlayed', user.uid);
-    if (!lpKey) return;
-    const saved = localStorage.getItem(lpKey);
+    let saved = null;
+    try {
+      const lpKey = getUserStorageKey('vns_lastPlayed', user.uid);
+      if (!lpKey) return;
+      saved = localStorage.getItem(lpKey);
+    } catch (err) {
+      console.warn("[storage] failed", err);
+    }
     if (!saved) {
       setResumeCandidate(null);
       setShowContinueListening(false);
