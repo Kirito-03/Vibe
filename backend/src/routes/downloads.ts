@@ -281,17 +281,17 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const { url, mode = 'audio', quality = 'high', youtube_id, title: bodyTitle, uploader: bodyUploader } = finalBody;
 
   if (!url) {
-    return res.status(400).json({ ok: false, code: 'BAD_REQUEST', message: 'URL requerida' });
+    return res.status(400).json({ ok: false, code: 'MISSING_TRACK_SOURCE', message: 'Missing youtubeId/sourceId/url' });
   }
 
   const ALLOWED_HOSTS = ['youtube.com', 'youtu.be', 'soundcloud.com'];
   try {
     const parsed = new URL(url);
     if (!['http:', 'https:'].includes(parsed.protocol) || !ALLOWED_HOSTS.some(h => parsed.hostname.endsWith(h))) {
-      return res.status(400).json({ error: 'URL no permitida o dominio no autoizado' });
+      return res.status(400).json({ ok: false, code: 'MISSING_TRACK_SOURCE', message: 'Missing youtubeId/sourceId/url' });
     }
   } catch {
-    return res.status(400).json({ error: 'URL inválida' });
+    return res.status(400).json({ ok: false, code: 'MISSING_TRACK_SOURCE', message: 'Missing youtubeId/sourceId/url' });
   }
 
   try {

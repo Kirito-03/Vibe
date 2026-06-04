@@ -1,3 +1,41 @@
+
+const isSafeRepairMatch = (originalTrack: any, candidate: any): number => {
+  let score = 0;
+  
+  const normTitle = (originalTrack.title || '').toLowerCase();
+  const cTitle = (candidate.title || '').toLowerCase();
+  
+  const origArtist = (originalTrack.artist || originalTrack.artist_name || '').toLowerCase();
+  const cArtist = (candidate.uploader || candidate.artist || '').toLowerCase();
+
+  if (origArtist && (cTitle.includes(origArtist) || cArtist.includes(origArtist) || origArtist.includes(cArtist))) {
+    score += 40;
+  }
+
+  const qTokens = normTitle.replace(/[^\w\s]/gi, '').split(/\s+/).filter((t: string) => t.length > 2);
+  let matchedTokens = 0;
+  for (const t of qTokens) {
+    if (cTitle.includes(t)) matchedTokens++;
+  }
+  if (qTokens.length > 0) {
+    score += (matchedTokens / qTokens.length) * 40;
+  }
+
+  const origDur = originalTrack.duration_seconds || originalTrack.durationSecs;
+  const cDur = candidate.duration_seconds;
+  if (origDur && cDur) {
+    const diff = Math.abs(origDur - cDur);
+    if (diff <= 10) score += 20;
+    else if (diff <= 20) score += 10;
+  }
+
+  const badModifiers = ['live', 'cover', 'karaoke', 'slowed', 'sped up', 'remix', 'letra', 'lyric'];
+  for (const mod of badModifiers) {
+    if (cTitle.includes(mod) && !normTitle.includes(mod)) score -= 50;
+  }
+
+  return score;
+};
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { User } from 'firebase/auth';
 import { CapacitorMusicControls } from 'capacitor-music-controls-plugin';
@@ -584,7 +622,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       console.log('[playback/prepare] start');
       try {
         const ytId = song.youtube_id || null;
-        const dlRes = await apiFetch('/api/downloads', {
+        let dlRes = await apiFetch('/api/downloads', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -595,7 +633,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
             youtube_id: ytId
           })
         });
-        const dlData = await dlRes.json().catch(() => ({}));
+        let dlData = await dlRes.json().catch(() => ({}));
         
         if (!isMyGen()) return;
 
@@ -1035,7 +1073,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
                           body: JSON.stringify({ url: makeSafeYoutubeWatchUrl(rec.youtube_id || rec.id), title: rec.title, uploader: rec.uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: rec.youtube_id || rec.id }),
                         });
                         if (dlRes.ok) {
-                          const dlData = await dlRes.json();
+                          let dlData = await dlRes.json();
                           if (dlData && dlData.id) nextSong = downloadToSong(dlData);
                         }
                       } catch {}
