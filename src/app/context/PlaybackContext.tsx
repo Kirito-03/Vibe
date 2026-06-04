@@ -64,6 +64,17 @@ const isSafeRepairMatch = (originalTrack: any, candidate: any): { score: number,
 
   return { score, rejectReason: null };
 };
+
+export const getTrackKey = (track: any): string => {
+  if (!track) return '';
+  if (track.youtube_id) return `yt:${track.youtube_id}`;
+  if (track.sourceId) return `src:${track.sourceId}`;
+  if (track.url && !track.url.includes('stream-direct')) return `url:${track.url}`;
+  if (track.audioUrl && !track.audioUrl.includes('stream-direct')) return `audio:${track.audioUrl}`;
+  const cleanTitle = (track.title || '').toLowerCase().replace(/official|audio|video|lyric|lyrics|\(.*?\)|\[.*?\]/g, '').trim();
+  const cleanArtist = (track.artist || track.artist_name || '').toLowerCase().trim();
+  return `txt:${cleanTitle}|${cleanArtist}|${track.duration_seconds || 0}`;
+};
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { User } from 'firebase/auth';
 import { CapacitorMusicControls } from 'capacitor-music-controls-plugin';
@@ -507,7 +518,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       return null;
     }
   };
-  const playSongInternal = useCallback(async (song: Song, playlist?: Playlist, isCrossfade = false, opts?: { userInitiated?: boolean }) => {
+  const playSongInternal = useCallback(async (song: Song, playlist?: Playlist, isCrossfade = false, opts?: { userInitiated?: boolean, forcePlay?: boolean, fromQueueNavigation?: boolean }) => {
     setPlaybackError(null);
     lastUserInitiatedRef.current = Boolean(opts?.userInitiated);
     if (!song?.file_url) {
@@ -534,7 +545,8 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
 
     if (import.meta.env.DEV) console.debug('[playback/playSong] song', song);
 
-    if (currentSong?.id === song.id && !isCrossfade) {
+    if (import.meta.env.DEV && opts?.forcePlay) console.log('[playback/playSong] forcePlay=true fromQueueNavigation=' + Boolean(opts?.fromQueueNavigation));
+    if (currentSong && getTrackKey(currentSong) === getTrackKey(song) && !isCrossfade && !opts?.forcePlay) {
       const a = audioRef.current;
       if (a) {
         if (a.paused) {
@@ -789,6 +801,11 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
           throw error;
         }
 
+        
+        if (song.youtube_id && dlData?.youtubeId && dlData.youtubeId !== song.youtube_id) {
+           console.warn(`[playback/validate] source-mismatch old=${song.youtube_id} actual=${dlData.youtubeId}`);
+           throw { status: 400, code: 'MISSING_TRACK_SOURCE', message: 'Source mismatch' };
+        }
         if (dlData?.status === 'ready' && dlData?.audioUrl) {
           console.log('[playback/prepare] ready audioUrl=' + dlData.audioUrl);
           finalAudioUrl = dlData.audioUrl;
@@ -1288,8 +1305,8 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     } catch {}
   }, [currentSong, isPlaying, isTooSimilar, resolveMediaUrl, settings.audioQuality, settings.autoplay, toStorableFileUrl, volume]);
 
-  const playSong = useCallback((song: Song, playlist?: Playlist, isCrossfade = false) => {
-    playSongInternal(song, playlist, isCrossfade, { userInitiated: true });
+  const playSong = useCallback((song: Song, playlist?: Playlist, isCrossfade = false, opts?: any) => {
+    playSongInternal(song, playlist, isCrossfade, { userInitiated: true, ...opts });
   }, [playSongInternal]);
 
   const togglePlay = useCallback(() => {
@@ -1329,15 +1346,48 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     const list = currentPlaylist?.songs;
     if (!list || !currentSong) return;
     const isRadio = String(currentPlaylist?.id || '').startsWith('radio-');
-    let nextSong: Song;
+    let nextSong: Song | null = null;
+    let nextIdx = -1;
+    const currentKey = getTrackKey(currentSong);
+    
     if (shuffle && !isRadio) {
-      const remaining = list.filter((s) => s.id !== currentSong.id);
-      nextSong = remaining.length > 0 ? remaining[Math.floor(Math.random() * remaining.length)] : currentSong;
+      const remaining = list.filter((s) => getTrackKey(s) !== currentKey);
+      if (remaining.length > 0) nextSong = remaining[Math.floor(Math.random() * remaining.length)];
     } else {
-      const idx = list.findIndex((s) => s.id === currentSong.id);
-      nextSong = list[(idx + 1) % list.length];
+      const isAutoEnded = e?.detail?.auto === true || e?.detail?.isManualSkip === false;
+      const repeatMode = playerStateRef.current.repeatMode;
+      
+      let idx = list.findIndex((s) => s.id === currentSong.id);
+      if (idx === -1) idx = 0;
+      
+      if (isAutoEnded && repeatMode === 'one') {
+         nextSong = currentSong;
+      } else {
+         for (let i = 1; i <= list.length; i++) {
+            const candidateIdx = (idx + i) % list.length;
+            const candidate = list[candidateIdx];
+            if (getTrackKey(candidate) !== currentKey) {
+               if (isAutoEnded && repeatMode === 'none' && candidateIdx <= idx) {
+                  // We wrapped around and repeat is none. Stop playback.
+                  break;
+               }
+               nextSong = candidate;
+               nextIdx = candidateIdx;
+               break;
+            }
+         }
+      }
+      if (nextSong) {
+         console.log(`[playback/next] currentIndex=${idx} nextIndex=${nextIdx} currentKey=${currentKey} nextKey=${getTrackKey(nextSong)}`);
+      }
     }
-    playSong(nextSong, currentPlaylist);
+    
+    if (nextSong) {
+       playSong(nextSong, currentPlaylist, isCrossfade, { forcePlay: true, fromQueueNavigation: true });
+    } else {
+       console.log(`[playback/ended] repeatMode=${playerStateRef.current.repeatMode} hasNext=false`);
+       setIsPlaying(false);
+    }
   }, [currentPlaylist, currentSong, playSong, shuffle]);
 
   const previous = useCallback(() => {
@@ -1349,23 +1399,52 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       return;
     }
 
-    let prevSong: Song;
+    let prevSong: Song | null = null;
+    let prevIdx = -1;
+    const currentKey = getTrackKey(currentSong);
+    
     if (shuffle) {
-      const remaining = list.filter((s) => s.id !== currentSong.id);
-      prevSong = remaining.length > 0 ? remaining[Math.floor(Math.random() * remaining.length)] : currentSong;
+      const remaining = list.filter((s) => getTrackKey(s) !== currentKey);
+      if (remaining.length > 0) prevSong = remaining[Math.floor(Math.random() * remaining.length)];
     } else {
-      const idx = list.findIndex((s) => s.id === currentSong.id);
-      const prevIdx = (idx - 1 + list.length) % list.length;
-      prevSong = list[prevIdx];
+      let idx = list.findIndex((s) => s.id === currentSong.id);
+      if (idx === -1) idx = 0;
+      for (let i = 1; i <= list.length; i++) {
+         const candidateIdx = (idx - i + list.length) % list.length;
+         const candidate = list[candidateIdx];
+         if (getTrackKey(candidate) !== currentKey) {
+            prevSong = candidate;
+            prevIdx = candidateIdx;
+            break;
+         }
+      }
+      if (prevSong) {
+         console.log(`[playback/previous] currentIndex=${idx} prevIndex=${prevIdx}`);
+      }
     }
-    playSong(prevSong, currentPlaylist);
+    
+    if (prevSong) {
+       playSong(prevSong, currentPlaylist, false, { forcePlay: true, fromQueueNavigation: true });
+    } else {
+       audioRef.current.currentTime = 0;
+       audioRef.current.play().catch(() => {});
+    }
   }, [currentPlaylist, currentSong, playSong, shuffle]);
 
   const reorderQueue = useCallback((tracks: Track[]) => {
     setPlaybackError(null);
     setCurrentPlaylist((prev) => {
       const base: Playlist = prev || { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: [] };
-      const songs = tracks.map(songFromTrack);
+      let songs = tracks.map(songFromTrack);
+      console.log(`[queue/dedupe] before=${songs.length}`);
+      const uniqueKeys = new Set<string>();
+      songs = songs.filter(s => {
+         const k = getTrackKey(s);
+         if (uniqueKeys.has(k)) return false;
+         uniqueKeys.add(k);
+         return true;
+      });
+      console.log(`[queue/dedupe] after=${songs.length}`);
       return { ...base, songs };
     });
   }, []);
