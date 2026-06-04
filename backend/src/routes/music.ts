@@ -10,6 +10,7 @@ import { computeMusicProfileHash, generateMusicSeedsWithDeepSeek, mixQueries, ty
 import { getSearchQueryAlternatives } from '../services/searchAiAssist';
 import { normalizeSearchQuery, normalizeText as normalizeSearchText, rankSearchResults } from '../services/searchRanking';
 import { rerankWithDeepSeek, isSearchRerankEnabled } from '../services/searchDeepseekRerank';
+import { asyncHandler } from '../utils';
 
 import { rankRecommendationResults } from '../services/recommendationRanking';
 import {
@@ -674,7 +675,7 @@ const buildTrackKeyFromInput = (track: any) => {
   return '';
 };
 
-router.post('/recommendation-feedback', async (req, res) => {
+router.post('/recommendation-feedback', asyncHandler(async (req, res) => {
   const uid = String((req as any)?.user?.uid || '').trim();
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
   const body = readBodyAsJson(req);
@@ -705,9 +706,9 @@ router.post('/recommendation-feedback', async (req, res) => {
 
   console.log('[recommendation-feedback]', { uid: 'yes', type: feedbackType, track: youtubeId ? youtubeId : trackKey });
   return res.json({ ok: true });
-});
+}));
 
-router.post('/seen-tracks', async (req, res) => {
+router.post('/seen-tracks', asyncHandler(async (req, res) => {
   const uid = String((req as any)?.user?.uid || '').trim();
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
   const body = readBodyAsJson(req);
@@ -716,9 +717,9 @@ router.post('/seen-tracks', async (req, res) => {
   if (!Array.isArray(items) || items.length === 0) return res.json({ ok: true, marked: 0 });
   await markUserSeenTracks({ uid, items, reason });
   return res.json({ ok: true, marked: Math.min(items.length, 120) });
-});
+}));
 
-router.delete('/seen-tracks', async (req, res) => {
+router.delete('/seen-tracks', asyncHandler(async (req, res) => {
   const uid = String((req as any)?.user?.uid || '').trim();
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
   const body = readBodyAsJson(req);
@@ -727,9 +728,9 @@ router.delete('/seen-tracks', async (req, res) => {
   const result = await clearUserSeenTracks(uid);
   console.log('[seen-tracks] cleared', { uid: 'yes', deleted: result.deleted });
   return res.json({ ok: true, deleted: result.deleted });
-});
+}));
 
-router.delete('/recommendation-cache', async (req, res) => {
+router.delete('/recommendation-cache', asyncHandler(async (req, res) => {
   const uid = String((req as any)?.user?.uid || '').trim();
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
   const body = readBodyAsJson(req);
@@ -740,10 +741,10 @@ router.delete('/recommendation-cache', async (req, res) => {
   const result = await clearUserRecommendationCache(uid);
   console.log('[recommendation-cache] cleared', { uid: 'yes', deleted: result.deleted });
   return res.json({ ok: true, deleted: result.deleted });
-});
+}));
 
 // ── GET /api/music/for-you — Combinar DB local y recomendaciones ──
-router.get('/for-you', async (req, res) => {
+router.get('/for-you', asyncHandler(async (req, res) => {
   const reqId = makeReqId();
   const startedAt = Date.now();
   const rawSeed = typeof req.query.seed === 'string' ? req.query.seed.trim() : '';
@@ -1241,7 +1242,7 @@ router.get('/for-you', async (req, res) => {
       res.json(response);
     }
   }
-});
+}));
 const recommendationsHandler = async (req: any, res: any) => {
   const reqId = makeReqId();
   const { seed, exclude } = req.query;
@@ -1911,8 +1912,8 @@ const recommendationsHandler = async (req: any, res: any) => {
     }
   }
 };
-router.get('/recommendations', recommendationsHandler);
-router.post('/radio', async (req, res) => {
+router.get('/recommendations', asyncHandler(recommendationsHandler));
+router.post('/radio', asyncHandler(async (req, res) => {
   const body = readBodyAsJson(req);
   const currentTrack = (body as any)?.currentTrack || null;
   const queue = Array.isArray((body as any)?.queue) ? (body as any)?.queue : [];
@@ -1935,8 +1936,8 @@ router.post('/radio', async (req, res) => {
     mode: 'radio',
   };
   return recommendationsHandler(req as any, res as any);
-});
-router.get('/lyrics', async (req, res) => {
+}));
+router.get('/lyrics', asyncHandler(async (req, res) => {
   const title = req.query.title as string;
   const artist = req.query.artist as string;
 
@@ -1978,7 +1979,7 @@ router.get('/lyrics', async (req, res) => {
   }
 });
 
-router.get('/worker-health', async (_req, res) => {
+router.get('/worker-health', asyncHandler(async (_req, res) => {
   try {
     const health = await workerHealth();
     res.json({ enabled: isWorkerEnabled(), ...health });
@@ -1989,7 +1990,7 @@ router.get('/worker-health', async (_req, res) => {
 });
 
 // ── Search: busca en Downloads (datos reales de la DB) y en YouTube ──
-router.get('/search', async (req, res) => {
+router.get('/search', asyncHandler(async (req, res) => {
 
   const reqId = makeReqId();
   const startedAt = Date.now();
@@ -2314,7 +2315,7 @@ router.get('/search', async (req, res) => {
 
 
 // ── GET playlists reales ──
-router.get('/playlists', async (req, res) => {
+router.get('/playlists', asyncHandler(async (req, res) => {
   try {
     const playlists = await pool.query(
       "SELECT * FROM Playlists WHERE name NOT IN ('Workout Hits', 'Chill Vibes') ORDER BY created_at DESC"
@@ -2324,10 +2325,10 @@ router.get('/playlists', async (req, res) => {
     console.error(error);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ── GET single playlist con canciones ──
-router.get('/playlists/:id', async (req, res) => {
+router.get('/playlists/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
   try {
     const playlistResult = await pool.query('SELECT * FROM Playlists WHERE id = $1', [id]);
@@ -2351,10 +2352,10 @@ router.get('/playlists/:id', async (req, res) => {
     console.error(error);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ── POST /api/music/like — guardar like ──
-router.post('/like', async (req, res) => {
+router.post('/like', asyncHandler(async (req, res) => {
   const { download_id } = req.body;
   if (!download_id) return res.status(400).json({ error: 'download_id requerido' });
 
@@ -2368,10 +2369,10 @@ router.post('/like', async (req, res) => {
     console.error(error);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ── DELETE /api/music/like — quitar like ──
-router.delete('/like/:download_id', async (req, res) => {
+router.delete('/like/:download_id', asyncHandler(async (req, res) => {
   try {
     await pool.query('DELETE FROM Likes WHERE download_id = $1', [req.params.download_id]);
     res.json({ liked: false });
@@ -2379,10 +2380,10 @@ router.delete('/like/:download_id', async (req, res) => {
     console.error(error);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ── GET /api/music/likes — listar likes ──
-router.get('/likes', async (_req, res) => {
+router.get('/likes', asyncHandler(async (_req, res) => {
   try {
     const result = await pool.query(
       `SELECT d.* FROM Likes l JOIN Downloads d ON l.download_id = d.id ORDER BY l.created_at DESC`
@@ -2392,10 +2393,10 @@ router.get('/likes', async (_req, res) => {
     console.error(error);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ── POST /api/music/history — registrar escucha ──
-router.post('/history', async (req, res) => {
+router.post('/history', asyncHandler(async (req, res) => {
   const { download_id } = req.body;
   if (!download_id) return res.status(400).json({ error: 'download_id requerido' });
 
@@ -2409,10 +2410,10 @@ router.post('/history', async (req, res) => {
     console.error(error);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ── GET /api/music/history — escuchado recientemente ──
-router.get('/history', async (_req, res) => {
+router.get('/history', asyncHandler(async (_req, res) => {
   try {
     const result = await pool.query(
       `SELECT DISTINCT ON (d.id) d.*, h.played_at 
@@ -2428,9 +2429,9 @@ router.get('/history', async (_req, res) => {
     console.error(error);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
-router.post('/resolve-audio', async (req, res) => {
+router.post('/resolve-audio', asyncHandler(async (req, res) => {
   const reqId = makeReqId();
   const body = (req as any)?.body || {};
   const track = body?.track || {};
@@ -2651,6 +2652,6 @@ router.post('/resolve-audio', async (req, res) => {
   } finally {
     resolveAudioPending.delete(lookupKey);
   }
-});
+}));
 
 export default router;

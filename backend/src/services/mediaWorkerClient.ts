@@ -197,21 +197,37 @@ export const getWorkerCapabilities = async (): Promise<WorkerCapabilities | null
 
 const workerConcurrencyLimit = (): number => {
   const raw = Number.parseInt(process.env.WORKER_DOWNLOAD_CONCURRENCY || '1', 10);
-  return Number.isFinite(raw) && raw > 0 ? Math.min(raw, 4) : 1;
+  return Number.isFinite(raw) && raw > 0 ? raw : 1;
+};
+
+const workerQueueMax = (): number => {
+  const raw = Number.parseInt(process.env.WORKER_DOWNLOAD_QUEUE_MAX || '5', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 5;
 };
 
 let _activeWorkerDownloads = 0;
 const _workerDownloadQueue: Array<() => void> = [];
 
+// Log effective concurrency at module load time so it's visible in backend logs
+console.log('[worker/queue] concurrency=' + workerConcurrencyLimit() + ' queueMax=' + workerQueueMax());
+
 const acquireWorkerSlot = (): Promise<void> => {
   const limit = workerConcurrencyLimit();
+  const maxQ = workerQueueMax();
+
   if (_activeWorkerDownloads < limit) {
     _activeWorkerDownloads++;
     console.log('[worker/queue] start', { active: _activeWorkerDownloads, limit });
     return Promise.resolve();
   }
+
+  if (_workerDownloadQueue.length >= maxQ) {
+    console.warn('[worker/queue] rejected: queue full', { active: _activeWorkerDownloads, limit, queued: _workerDownloadQueue.length, maxQ });
+    return Promise.reject(new Error('Demasiadas descargas en cola. Intenta más tarde.'));
+  }
+
   return new Promise((resolve) => {
-    console.log('[worker/queue] waiting', { active: _activeWorkerDownloads, limit, queued: _workerDownloadQueue.length });
+    console.log('[worker/queue] waiting', { active: _activeWorkerDownloads, limit, queued: _workerDownloadQueue.length + 1 });
     _workerDownloadQueue.push(() => {
       _activeWorkerDownloads++;
       console.log('[worker/queue] start (dequeued)', { active: _activeWorkerDownloads, limit });

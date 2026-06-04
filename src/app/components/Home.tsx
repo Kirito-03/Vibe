@@ -379,7 +379,7 @@ export function Home({
           const cacheRes = await apiFetch(`/api/downloads/resolve?youtube_id=${encodeURIComponent(youtubeId)}&mode=audio`);
           const cacheJson = cacheRes.ok ? await cacheRes.json().catch(() => null) : null;
           if (cacheJson?.cached && cacheJson?.audioUrl) {
-            onSongPlay({ ...song, file_url: String(cacheJson.audioUrl), isPlaying: true });
+            onSongPlay({ ...song, file_url: String(cacheJson.audioUrl) });
             setDownloadingIds(prev => {
               const next = new Set(prev);
               next.delete(idStr);

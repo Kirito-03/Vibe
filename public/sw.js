@@ -1,5 +1,5 @@
-const CACHE_NAME = 'vns-offline-v4';
-const MEDIA_CACHE = 'vns-media-v4';
+const CACHE_NAME = 'vns-offline-v5';
+const MEDIA_CACHE = 'vns-media-v5';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -20,15 +20,29 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Bypasar Cache para los Audio Streams (para evitar que Range Requests de 206 parcial se rompan por el SW)
-  if (url.pathname.includes('/api/downloads/') && url.pathname.endsWith('/stream')) {
-    return; // Passthrough absoluto, dejando que Chrome use su cache nativo de multimedia
+  // Never intercept API requests — absolute passthrough to network.
+  // This covers /api/downloads, /api/downloads/stream, POST /api/downloads, etc.
+  if (url.pathname.startsWith('/api/')) {
+    return;
   }
 
-  if (event.request.method === 'GET' && event.request.mode === 'navigate') {
+  // Never intercept non-GET requests (POST, PUT, DELETE, PATCH).
+  // These must always hit the network and never touch the cache.
+  if (event.request.method !== 'GET') {
+    return;
+  }
+
+  // Bypass chrome-extensions
+  if (url.protocol.startsWith('chrome-extension') || url.pathname.startsWith('chrome-extension')) {
+    return;
+  }
+
+  // Navigation requests: network-first, fallback to index.html
+  if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
+          if (!response || response.status !== 200) return response;
           const responseToCache = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', responseToCache));
           return response;
@@ -38,21 +52,28 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // UI Assets and other GET requests (Network First strategy)
-  if (event.request.method === 'GET' && !url.pathname.startsWith('/api/') && !url.pathname.startsWith('chrome-extension')) {
-    event.respondWith(
-      fetch(event.request).then((response) => {
-        if (!response || response.status !== 200 || (response.type !== 'basic' && response.type !== 'cors')) {
-          return response;
-        }
-        const responseToCache = response.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseToCache);
-        });
+  // UI Assets — Network First strategy.
+  // NEVER cache: opaque responses, non-200 status, non-basic/cors types.
+  // opaque responses always have status=0 and Cache.put() throws a network error.
+  event.respondWith(
+    fetch(event.request).then((response) => {
+      if (
+        !response ||
+        response.status !== 200 ||
+        response.type === 'opaque' ||
+        (response.type !== 'basic' && response.type !== 'cors')
+      ) {
         return response;
-      }).catch(() => {
-        return caches.match(event.request, { ignoreSearch: true });
-      })
-    );
-  }
+      }
+      const responseToCache = response.clone();
+      caches.open(CACHE_NAME).then((cache) => {
+        cache.put(event.request, responseToCache).catch(() => {
+          // Silently swallow cache write errors (quota exceeded, etc.)
+        });
+      });
+      return response;
+    }).catch(() => {
+      return caches.match(event.request, { ignoreSearch: true });
+    })
+  );
 });

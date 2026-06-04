@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import { downloadWithWorker, extractWithWorker, isWorkerEnabled } from '../services/mediaWorkerClient';
+import { asyncHandler } from '../utils';
 import { upsertGlobalCatalogTracks } from '../services/recommendationStore';
 
 const router = Router();
@@ -205,7 +206,7 @@ const toApiDownload = (row: any) => {
 // ──────────────────────────────────────────────
 // GET /api/downloads/resolve → cache-hit rápido (sin descargar)
 // ──────────────────────────────────────────────
-router.get('/resolve', async (req: Request, res: Response) => {
+router.get('/resolve', asyncHandler(async (req: Request, res: Response) => {
   const youtubeId = String(req.query.youtube_id || '').trim();
   const mode = String(req.query.mode || 'audio').trim() === 'video' ? 'video' : 'audio';
   if (!youtubeId) return res.status(400).json({ ok: false, error: 'youtube_id requerido' });
@@ -244,13 +245,15 @@ router.get('/resolve', async (req: Request, res: Response) => {
     console.error('[downloads] resolve error', { message: error?.message });
     return res.status(500).json({ ok: false, error: 'Internal server error' });
   }
-});
+}));
 
 // ──────────────────────────────────────────────
 // POST /api/downloads  →  solicita descarga
 // ──────────────────────────────────────────────
-router.post('/', async (req: Request, res: Response) => {
-  // Removed debug header log
+const makeReqId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+router.post('/', asyncHandler(async (req: Request, res: Response) => {
+  const reqId = makeReqId();
   let finalBody = req.body || {};
   if (typeof req.body === 'string' && req.body.trim().startsWith('{')) {
     try { finalBody = JSON.parse(req.body); } catch(e) {}
@@ -260,7 +263,7 @@ router.post('/', async (req: Request, res: Response) => {
   const { url, mode = 'audio', quality = 'high', youtube_id, title: bodyTitle, uploader: bodyUploader } = finalBody;
 
   if (!url) {
-    return res.status(400).json({ error: 'URL requerida' });
+    return res.status(400).json({ ok: false, code: 'BAD_REQUEST', message: 'URL requerida' });
   }
 
   const ALLOWED_HOSTS = ['youtube.com', 'youtu.be', 'soundcloud.com'];
@@ -280,6 +283,8 @@ router.post('/', async (req: Request, res: Response) => {
       : extractYoutubeId(url);
     const pendingKey = `${mode}:${extractedYoutubeId || normalizeKey(url)}`;
 
+    console.log(`[downloads] request reqId=${reqId} youtubeId=${extractedYoutubeId || 'unknown'}`);
+
     if (extractedYoutubeId) {
       const existingByYoutubeId = await pool.query(
         `SELECT * FROM Downloads WHERE youtube_id = $1 AND mode = $2 ORDER BY created_at DESC LIMIT 1`,
@@ -289,9 +294,11 @@ router.post('/', async (req: Request, res: Response) => {
         const existing = existingByYoutubeId.rows[0];
         const existingPath = existing.url as string;
         if (existingPath && /^https?:\/\//i.test(existingPath)) {
+          console.log(`[downloads] local-cache hit reqId=${reqId}`);
           return res.status(200).json(toApiDownload(existing));
         }
         if (existingPath && fs.existsSync(existingPath)) {
+          console.log(`[downloads] local-cache hit reqId=${reqId}`);
           return res.status(200).json(toApiDownload(existing));
         }
       }
@@ -299,7 +306,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     const pending = pendingDownloads.get(pendingKey);
     if (pending) {
-      console.log('[downloads] join pending download', { youtubeId: extractedYoutubeId || null, mode });
+      console.log(`[downloads] pending join reqId=${reqId} youtubeId=${extractedYoutubeId || 'unknown'} mode=${mode}`);
       const joined = await pending;
       return res.status(joined.status).json(toApiDownload(joined.row));
     }
@@ -307,6 +314,7 @@ router.post('/', async (req: Request, res: Response) => {
     const p = (async () => {
     let dlData: any | null = null;
     try {
+      console.log(`[downloads] convert start reqId=${reqId} url=${url}`);
       const pyRes = await axios.post(
         `${DOWNLOADER_URL}/download`,
         { url, mode, quality },
@@ -315,10 +323,10 @@ router.post('/', async (req: Request, res: Response) => {
       dlData = pyRes.data;
     } catch (error: any) {
       const failure = convertFailureReason(error);
-      console.warn('[downloads] convert failed', { reason: failure.reason, status: error?.response?.status });
+      console.warn(`[downloads] convert failed reqId=${reqId} reason=${failure.reason} status=${error?.response?.status}`);
 
       if (failure.shouldFallback && isWorkerEnabled()) {
-        console.log('[worker/download] fallback=true', { url });
+        console.log(`[downloads] worker fallback start reqId=${reqId} url=${url}`);
         const workerResult = await downloadWithWorker(url);
         if (workerResult && workerResult.ok && workerResult.fileUrl) {
           const ext = inferExt(workerResult.filename, mode === 'video' ? '.mp4' : '.mp3');
@@ -326,11 +334,11 @@ router.post('/', async (req: Request, res: Response) => {
             ? `${extractedYoutubeId}${ext}`
             : safeBaseName(workerResult.filename, `worker-${Date.now()}${ext}`);
           const localPath = path.join(MEDIA_BASE_DIR, mode === 'video' ? 'video' : 'audio', baseName);
-          console.log('[worker/file-copy] start', { url: workerResult.fileUrl.slice(0, 80), dest: baseName });
+          console.log(`[worker/file-copy] start reqId=${reqId} url=${workerResult.fileUrl.slice(0, 80)} dest=${baseName}`);
           const stored = await downloadRemoteToLocal(String(workerResult.fileUrl), localPath);
           if (stored) {
             const storedSize = fs.statSync(stored).size;
-            console.log('[worker/file-copy] ok', { bytes: storedSize, dest: path.basename(stored) });
+            console.log(`[worker/file-copy] ok reqId=${reqId} bytes=${storedSize} dest=${path.basename(stored)}`);
             dlData = {
               ok: true,
               title: workerResult.raw?.title || workerResult.raw?.files?.[0]?.name || null,
@@ -342,18 +350,15 @@ router.post('/', async (req: Request, res: Response) => {
               source: 'worker',
             };
           } else {
-            console.warn('[worker/file-copy] failed', { reason: 'WORKER_FILE_COPY_FAILED', url: workerResult.fileUrl.slice(0, 80) });
+            console.warn(`[worker/file-copy] failed reqId=${reqId} reason=WORKER_FILE_COPY_FAILED url=${workerResult.fileUrl.slice(0, 80)}`);
           }
         } else if (workerResult !== null) {
-          console.warn('[worker/download] empty_response', { ok: workerResult?.ok, filesCount: workerResult?.files?.length ?? 0 });
+          console.warn(`[worker/download] empty_response reqId=${reqId} ok=${workerResult?.ok} filesCount=${workerResult?.files?.length ?? 0}`);
         }
       }
       if (!dlData) {
-        // Construct a clear error — don't expose YouTube auth error if worker was tried
-        const finalError = failure.shouldFallback && isWorkerEnabled()
-          ? Object.assign(new Error('No pudimos preparar esta canción. Intenta otra vez.'), { response: { data: { detail: 'No pudimos preparar esta canción. Intenta otra vez.' }, status: 502 } })
-          : error;
-        throw finalError;
+        // Construct a clear error
+        throw new Error('No pudimos preparar esta canción. Intenta otra vez.');
       }
     }
 
@@ -393,29 +398,58 @@ router.post('/', async (req: Request, res: Response) => {
       }
     }
 
-    const result = await pool.query(
-      `INSERT INTO Downloads (title, uploader, duration, thumbnail, url, mode, youtube_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (youtube_id, mode) WHERE youtube_id IS NOT NULL
-       DO UPDATE SET
-         title = EXCLUDED.title,
-         uploader = EXCLUDED.uploader,
-         duration = EXCLUDED.duration,
-         thumbnail = EXCLUDED.thumbnail,
-         url = EXCLUDED.url
-       RETURNING *`,
-      [
-        normalizedTitle,
-        normalizedArtist || null,
-        duration_seconds || null,
-        thumbnail_url || `https://i.ytimg.com/vi/${extractedYoutubeId}/hqdefault.jpg`,
-        file_path,
-        mode,
-        extractedYoutubeId,
-      ]
-    );
+    // Guard against "ON CONFLICT DO UPDATE command cannot affect row a second time"
+    // which happens when two concurrent requests with the same youtube_id both reach
+    // this INSERT before the pendingDownloads Map can deduplicate them.
+    let result: any;
+    try {
+      result = await pool.query(
+        `INSERT INTO Downloads (title, uploader, duration, thumbnail, url, mode, youtube_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (youtube_id, mode) WHERE youtube_id IS NOT NULL
+         DO UPDATE SET
+           title = EXCLUDED.title,
+           uploader = EXCLUDED.uploader,
+           duration = EXCLUDED.duration,
+           thumbnail = EXCLUDED.thumbnail,
+           url = EXCLUDED.url
+         RETURNING *`,
+        [
+          normalizedTitle,
+          normalizedArtist || null,
+          duration_seconds || null,
+          thumbnail_url || `https://i.ytimg.com/vi/${extractedYoutubeId}/hqdefault.jpg`,
+          file_path,
+          mode,
+          extractedYoutubeId,
+        ]
+      );
+    } catch (insertErr: any) {
+      // Race condition: two concurrent inserts with same youtube_id hit ON CONFLICT simultaneously.
+      // PostgreSQL throws: "ON CONFLICT DO UPDATE command cannot affect row a second time"
+      const msg = String(insertErr?.message || '');
+      const isRaceConflict =
+        msg.includes('ON CONFLICT DO UPDATE command cannot affect row a second time') ||
+        msg.includes('duplicate key') ||
+        String(insertErr?.code || '') === '21000';
+
+      if (isRaceConflict && extractedYoutubeId) {
+        console.warn(`[downloads] ON CONFLICT race detected reqId=${reqId} youtubeId=${extractedYoutubeId} - falling back to SELECT`);
+        const fallback = await pool.query(
+          `SELECT * FROM Downloads WHERE youtube_id = $1 AND mode = $2 ORDER BY created_at DESC LIMIT 1`,
+          [extractedYoutubeId, mode]
+        );
+        if (fallback.rows.length > 0) {
+          return { status: 200, row: fallback.rows[0] };
+        }
+      }
+      // Re-throw if not a race conflict
+      throw insertErr;
+    }
 
     const saved = result.rows[0];
+    console.log(`[downloads] saved reqId=${reqId} id=${saved.id}`);
+    
     const uid = String((req as any)?.user?.uid || '').trim();
     if (uid && saved?.youtube_id) {
       void upsertGlobalCatalogTracks(
@@ -441,16 +475,21 @@ router.post('/', async (req: Request, res: Response) => {
     pendingDownloads.set(pendingKey, p);
     try {
       const final = await p;
+      console.log(`[downloads] response reqId=${reqId} streamUrl=/api/downloads/stream/${final.row.id}`);
       return res.status(final.status).json(toApiDownload(final.row));
     } finally {
       pendingDownloads.delete(pendingKey);
     }
   } catch (error: any) {
-    console.error('[downloads] Error:', error?.response?.data || error.message);
-    const detail = error?.response?.data?.detail || error.message;
-    return res.status(500).json({ error: detail });
+    const detail = String(error?.response?.data?.detail || error?.message || 'Unknown error');
+    console.error('[downloads] Error:', { reqId: makeReqId(), detail, status: error?.response?.status });
+    return res.status(500).json({
+      ok: false,
+      code: 'DOWNLOAD_FAILED',
+      message: 'No pudimos preparar esta canción. Intenta otra vez.',
+    });
   }
-});
+}));
 
 // ──────────────────────────────────────────────
 // GET /api/downloads  →  listar todos

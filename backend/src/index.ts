@@ -63,10 +63,15 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   console.error('[express] unhandled error', {
     method: req.method,
     path: req.originalUrl,
-    error: err,
+    error: err?.message || err,
+    stack: err?.stack,
   });
   if (res.headersSent) return next(err);
-  res.status(500).json({ error: 'Internal server error' });
+  res.status(500).json({
+    ok: false,
+    code: 'INTERNAL_ERROR',
+    message: 'Ocurrió un error interno controlado'
+  });
 });
 
 const startServer = async () => {

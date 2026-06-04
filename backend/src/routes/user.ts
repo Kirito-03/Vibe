@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import pool from '../db';
 import { admin } from '../firebase';
+import { asyncHandler } from '../utils';
 
 const router = Router();
 
@@ -161,6 +162,12 @@ const previewOrReset = async (req: Request, res: Response) => {
       }
     }
 
+    if (!dryRun) {
+      await pool.query('DELETE FROM UserSeenTracks WHERE firebase_uid = $1', [uid]);
+      await pool.query('DELETE FROM UserRecommendationFeedback WHERE firebase_uid = $1', [uid]);
+      await pool.query('DELETE FROM "UserRecommendationCache" WHERE firebase_uid = $1', [uid]);
+    }
+
     res.json({
       ok: true,
       dryRun,
@@ -173,10 +180,10 @@ const previewOrReset = async (req: Request, res: Response) => {
   }
 };
 
-router.post('/reset-data/preview', (req, res) => {
+router.post('/reset-data/preview', asyncHandler((req: Request, res: Response) => {
   (req as any).query = { ...(req as any).query, dryRun: 'true' };
-  previewOrReset(req, res);
-});
-router.delete('/reset-data', previewOrReset);
+  return previewOrReset(req, res);
+}));
+router.delete('/reset-data', asyncHandler(previewOrReset));
 
 export default router;

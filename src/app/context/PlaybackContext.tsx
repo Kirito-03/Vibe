@@ -24,6 +24,8 @@ type PlaybackContextValue = {
   shuffle: boolean;
   favorites: Set<string>;
   playbackError: string | null;
+  isResolvingAudio: boolean;
+  resolvingTrackKey: string | null;
 
   playSong: (song: Song, playlist?: Playlist, isCrossfade?: boolean) => void;
   playTrack: (track: Track, opts?: { queue?: Track[] }) => void;
@@ -112,13 +114,15 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   const [currentSong, setCurrentSong] = useState<Song | null>(() => (persisted?.currentTrack ? songFromTrack(persisted.currentTrack) : null));
   const [currentPlaylist, setCurrentPlaylist] = useState<Playlist | null>(() => {
     const tracks = persisted?.queue ?? [];
-    if (!tracks.length) return persisted?.currentTrack ? { id: `queue-${Date.now()}`, name: 'Cola', songs: [songFromTrack(persisted.currentTrack)] } : null;
-    return { id: `queue-${Date.now()}`, name: 'Cola', songs: tracks.map(songFromTrack) };
+    if (!tracks.length) return persisted?.currentTrack ? { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: [songFromTrack(persisted.currentTrack)] } : null;
+    return { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: tracks.map(songFromTrack) };
   });
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [sleepTimerRemainingSec, setSleepTimerRemainingSec] = useState<number | null>(null);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [isResolvingAudio, setIsResolvingAudio] = useState(false);
+  const [resolvingTrackKey, setResolvingTrackKey] = useState<string | null>(null);
 
   const duration = currentSong?.durationSecs ?? currentSong?.duration_seconds ?? 0;
 
@@ -138,6 +142,9 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   const repairingRef = useRef(false);
   const expandingQueueRef = useRef(false);
   const bufferDoneRef = useRef(false);
+  // Tracks youtubeIds currently being fetched for the radio queue to prevent
+  // duplicate concurrent POST /api/downloads for the same track.
+  const pendingRadioDownloadsRef = useRef<Set<string>>(new Set());
 
   const sleepTimerTimeoutRef = useRef<number | null>(null);
   const sleepTimerTickRef = useRef<number | null>(null);
@@ -326,6 +333,23 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       return;
     }
 
+    const songKey = String(song.youtube_id || song.id);
+
+    // Prevent double-clicks triggering multiple requests for the same track
+    if (opts?.userInitiated && isResolvingAudio && resolvingTrackKey === songKey) {
+      return;
+    }
+
+    if (opts?.userInitiated) {
+      setIsResolvingAudio(true);
+      setResolvingTrackKey(songKey);
+      // Timeout fallback to clear the resolving state
+      setTimeout(() => {
+        setIsResolvingAudio(false);
+        setResolvingTrackKey(null);
+      }, 10000);
+    }
+
     if (import.meta.env.DEV) console.debug('[playback/playSong] song', song);
 
     if (currentSong?.id === song.id && !isCrossfade) {
@@ -355,7 +379,6 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     setProgress(0);
     const myGen = ++playGenRef.current;
 
-    const songKey = String(song.youtube_id || song.id);
     playedIdsRef.current.add(songKey);
 
     if (playlist) {
@@ -392,7 +415,17 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
           let strictRecs = validRecs.filter((rec) => !isTooSimilar(rec.title, seedSong.title));
           if (strictRecs.length === 0) strictRecs = validRecs;
 
+          // Process recommendations sequentially, max 3 per expansion, to prevent
+          // parallel POST /api/downloads that cause ON CONFLICT race in PostgreSQL.
+          let downloadedCount = 0;
+          const MAX_RADIO_DOWNLOADS = 3;
+
+          if (import.meta.env.DEV) console.debug('[radio/expand] start', { candidates: strictRecs.length, limited: MAX_RADIO_DOWNLOADS });
+
           for (const rec of strictRecs.slice(0, 15)) {
+            if (downloadedCount >= MAX_RADIO_DOWNLOADS) break;
+            const recKey = String(rec.youtube_id || rec.id || '');
+
             if (rec.source === 'local') {
               const newSong = {
                 id: rec.id,
@@ -414,11 +447,28 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
                 return { ...prev, songs: [...(prev.songs || []), newSong] };
               });
             } else {
-              apiFetch(`/api/downloads`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: rec.url, title: rec.title, uploader: rec.uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: rec.youtube_id || rec.id }),
-              }).then((dlRes) => dlRes.json()).then((dlData) => {
+              // Skip if already downloading this youtubeId for radio
+              if (!recKey || pendingRadioDownloadsRef.current.has(recKey)) {
+                if (import.meta.env.DEV) console.debug(`[playback/radio-expand] skip already pending key=${recKey}`);
+                continue;
+              }
+              // Skip if already in playlist
+              const alreadyInPlaylist = playerStateRef.current.currentPlaylist?.songs?.some(
+                (s) => String(s.youtube_id) === recKey
+              );
+              if (alreadyInPlaylist) continue;
+
+              pendingRadioDownloadsRef.current.add(recKey);
+              downloadedCount++;
+              if (import.meta.env.DEV) console.debug(`[playback/radio-expand] downloading key=${recKey}`);
+              try {
+                // Sequential await — one download at a time to prevent DB race
+                const dlRes = await apiFetch(`/api/downloads`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ url: rec.url, title: rec.title, uploader: rec.uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: rec.youtube_id || rec.id }),
+                });
+                const dlData = dlRes.ok ? await dlRes.json().catch(() => null) : null;
                 if (dlData && dlData.id) {
                   const downloadedSong = downloadToSong(dlData);
                   setCurrentPlaylist((prev) => {
@@ -427,7 +477,11 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
                     return { ...prev, songs: [...(prev.songs || []), downloadedSong] };
                   });
                 }
-              }).catch(() => {});
+              } catch {
+                // Ignore individual download errors — radio continues
+              } finally {
+                pendingRadioDownloadsRef.current.delete(recKey);
+              }
             }
           }
         } finally {
@@ -471,9 +525,9 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       const key = songKeyFromId(song.id);
       const ytUrl = song.youtube_id ? makeSafeYoutubeWatchUrl(song.youtube_id) : null;
       let ytId = song.youtube_id || null;
-      if (!ytId && (song.url || song.file_url)) {
+      if (!ytId && song.file_url) {
          try {
-           const urlStr = song.url || song.file_url;
+           const urlStr = song.file_url;
            if (urlStr) {
              const u = new URL(urlStr);
              ytId = u.searchParams.get('v') || null;
@@ -491,7 +545,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
         coverUrl: song.image_url ?? song.imageUrl ?? null,
         file_url: toStorableFileUrl(song.file_url),
         audioUrl: toStorableFileUrl(song.file_url),
-        url: ytUrl || song.url || null,
+        url: ytUrl || song.file_url || null,
         youtube_id: ytId,
         youtubeId: ytId,
         sourceId: ytId ?? song.id ?? null,
@@ -541,6 +595,10 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       const songYtId = String(song.youtube_id || song.id || '');
       if (!eventYtId || !songYtId || eventYtId !== songYtId) return;
       const localUrl: string = (ev as any).detail?.streamUrl;
+      
+      setIsResolvingAudio(false);
+      setResolvingTrackKey(null);
+
       if (!localUrl || audio.src?.includes('/stream/')) return;
       const wasPlaying = !audio.paused;
       const currentTime = audio.currentTime;
@@ -597,6 +655,8 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     };
 
     audio.addEventListener('canplay', () => {
+      setIsResolvingAudio(false);
+      setResolvingTrackKey(null);
       if (!playStarted && isMyGen()) doPlay();
     }, { once: true });
 
@@ -611,6 +671,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       isRecovering = true;
       repairingRef.current = true;
       setIsPlaying(false);
+      setIsResolvingAudio(true);
       setPlaybackError('No pudimos reproducir esta canción. Intentando repararla...');
 
       try {
@@ -631,7 +692,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
               id: song.id,
               sourceId: song.youtube_id ?? null,
               youtubeId: song.youtube_id ?? null,
-              url: song.url ?? song.file_url ?? null,
+              url: song.file_url ?? null,
               title: song.title,
               artist: song.artist_name ?? song.artist ?? null,
               coverUrl: song.image_url ?? song.imageUrl ?? null,
@@ -676,6 +737,8 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       } finally {
         isRecovering = false;
         repairingRef.current = false;
+        setIsResolvingAudio(false);
+        setResolvingTrackKey(null);
       }
     });
 
@@ -699,11 +762,28 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
             if (idx !== -1 && idx < state.currentPlaylist.songs.length - 1) nextSongToPreload = state.currentPlaylist.songs[idx + 1];
             else if (state.repeatMode === 'all') nextSongToPreload = state.currentPlaylist.songs[0];
           }
+
+          // Preload ONLY for songs that are already local/downloaded — never trigger
+          // Convert or Worker downloads just because we hit 80% progress.
+          // A valid local URL is either /api/downloads/stream/... or source='local'.
           if (nextSongToPreload?.file_url) {
-            const preloader = new Audio();
-            preloader.preload = 'auto';
-            preloader.src = resolveMediaUrl(nextSongToPreload.file_url);
-            preloadedAudioRef.current = preloader;
+            const nextUrl = nextSongToPreload.file_url;
+            const isLocalStream = nextUrl.includes('/api/downloads/stream/');
+            const isLocalSource = nextSongToPreload.source === 'local' || nextSongToPreload.source === 'downloaded';
+            const isAlreadyPreloading = preloadedAudioRef.current !== null;
+
+            if ((isLocalStream || isLocalSource) && !isAlreadyPreloading) {
+              if (import.meta.env.DEV) console.debug('[radio/preload] start local', { id: nextSongToPreload.id, url: nextUrl.slice(0, 60) });
+              const preloader = new Audio();
+              preloader.preload = 'auto';
+              preloader.src = resolveMediaUrl(nextUrl);
+              preloadedAudioRef.current = preloader;
+              if (import.meta.env.DEV) console.debug('[radio/preload] done');
+            } else if (!isLocalStream && !isLocalSource) {
+              if (import.meta.env.DEV) console.debug('[radio/preload] skip non-local', { source: nextSongToPreload.source, id: nextSongToPreload.id });
+            } else if (isAlreadyPreloading) {
+              if (import.meta.env.DEV) console.debug('[radio/preload] skip already preloading');
+            }
           }
 
           if (isRadio) {
@@ -722,14 +802,23 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
 
               apiFetch(`/api/music/recommendations?seed=${encodeURIComponent(seedQuery)}&exclude=${encodeURIComponent(excludeParam)}`)
                 .then((r) => (r.ok ? r.json().catch(() => null) : null))
-                .then((json: any) => {
+                .then(async (json: any) => {
                   const data: any[] = Array.isArray(json) ? json : Array.isArray(json?.items) ? json.items : [];
                   if (!Array.isArray(data) || data.length === 0) return;
                   let validRecs = data.filter((rec) => !playedIdsRef.current.has(String(rec.youtube_id || rec.id)));
                   let strictRecs = validRecs.filter((rec) => !isTooSimilar(rec.title, seedSong.title));
                   if (strictRecs.length === 0) strictRecs = validRecs;
 
+                  // Process sequentially, max 3, with dedup to prevent DB race
+                  let downloadedCount = 0;
+                  const MAX_RADIO_DOWNLOADS = 3;
+
+                  if (import.meta.env.DEV) console.debug('[radio/expand] start', { candidates: strictRecs.length, limited: MAX_RADIO_DOWNLOADS });
+
                   for (const rec of strictRecs.slice(0, 15)) {
+                    if (downloadedCount >= MAX_RADIO_DOWNLOADS) break;
+                    const recKey = String(rec.youtube_id || rec.id || '');
+
                     if (rec.source === 'local') {
                       const newSong: Song = {
                         id: rec.id,
@@ -751,11 +840,25 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
                         return { ...prev, songs: [...(prev.songs || []), newSong] };
                       });
                     } else {
-                      apiFetch(`/api/downloads`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url: makeSafeYoutubeWatchUrl(rec.youtube_id || rec.id), title: rec.title, uploader: rec.uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: rec.youtube_id || rec.id }),
-                      }).then((res) => res.json()).then((dlData) => {
+                      if (!recKey || pendingRadioDownloadsRef.current.has(recKey)) {
+                        if (import.meta.env.DEV) console.debug(`[playback/radio-expand] skip already pending key=${recKey}`);
+                        continue;
+                      }
+                      const alreadyInPlaylist = playerStateRef.current.currentPlaylist?.songs?.some(
+                        (s) => String(s.youtube_id) === recKey
+                      );
+                      if (alreadyInPlaylist) continue;
+
+                      pendingRadioDownloadsRef.current.add(recKey);
+                      downloadedCount++;
+                      if (import.meta.env.DEV) console.debug(`[playback/radio-expand] downloading key=${recKey}`);
+                      try {
+                        const dlRes = await apiFetch(`/api/downloads`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ url: makeSafeYoutubeWatchUrl(rec.youtube_id || rec.id), title: rec.title, uploader: rec.uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: rec.youtube_id || rec.id }),
+                        });
+                        const dlData = dlRes.ok ? await dlRes.json().catch(() => null) : null;
                         if (dlData && dlData.id) {
                           const downloadedSong = downloadToSong(dlData);
                           setCurrentPlaylist((prev) => {
@@ -764,7 +867,11 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
                             return { ...prev, songs: [...(prev.songs || []), downloadedSong] };
                           });
                         }
-                      }).catch(() => {});
+                      } catch {
+                        // Ignore individual download errors
+                      } finally {
+                        pendingRadioDownloadsRef.current.delete(recKey);
+                      }
                     }
                   }
                 })
@@ -978,7 +1085,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   const reorderQueue = useCallback((tracks: Track[]) => {
     setPlaybackError(null);
     setCurrentPlaylist((prev) => {
-      const base: Playlist = prev || { id: `queue-${Date.now()}`, name: 'Cola', songs: [] };
+      const base: Playlist = prev || { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: [] };
       const songs = tracks.map(songFromTrack);
       return { ...base, songs };
     });
@@ -1009,7 +1116,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   const addToQueue = useCallback((track: Track) => {
     setPlaybackError(null);
     setCurrentPlaylist((prev) => {
-      const base: Playlist = prev || { id: `queue-${Date.now()}`, name: 'Cola', songs: currentSong ? [currentSong] : [] };
+      const base: Playlist = prev || { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: currentSong ? [currentSong] : [] };
       return { ...base, songs: [...(base.songs || []), songFromTrack(track)] };
     });
   }, [currentSong]);
@@ -1017,7 +1124,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   const clearQueue = useCallback(() => {
     setPlaybackError(null);
     setCurrentPlaylist((prev) => {
-      const base: Playlist = prev || { id: `queue-${Date.now()}`, name: 'Cola', songs: [] };
+      const base: Playlist = prev || { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: [] };
       return { ...base, songs: currentSong ? [currentSong] : [] };
     });
   }, [currentSong]);
@@ -1029,7 +1136,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       return;
     }
     const song = songFromTrack(track);
-    const playlist = opts?.queue ? { id: `queue-${Date.now()}`, name: 'Cola', songs: opts.queue.map(songFromTrack) } : undefined;
+    const playlist = opts?.queue ? { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: opts.queue.map(songFromTrack) } : undefined;
     playSong(song, playlist);
   }, [playSong]);
 
@@ -1131,7 +1238,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     } catch {}
   }, [isPlaying]);
 
-  const value: PlaybackContextValue = {
+  const value: PlaybackContextValue = useMemo(() => ({
     currentTrack,
     queue,
     isPlaying,
@@ -1142,6 +1249,8 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     shuffle,
     favorites,
     playbackError,
+    isResolvingAudio,
+    resolvingTrackKey,
     playSong,
     playTrack,
     pause,
@@ -1165,7 +1274,14 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     sleepTimerRemainingSec,
     currentSong,
     currentPlaylist,
-  };
+  }), [
+    currentTrack, queue, isPlaying, volume, progress, duration, repeatMode,
+    shuffle, favorites, playbackError, isResolvingAudio, resolvingTrackKey, playSong, playTrack, pause,
+    resume, next, previous, seek, toggleFavorite, toggleFavoriteSong, addToQueue,
+    removeFromQueue, clearQueue, setSleepTimer, setVolume, togglePlay,
+    toggleShuffle, cycleRepeat, reorderQueue, playNextFromQueueIndex, reset,
+    sleepTimerRemainingSec, currentSong, currentPlaylist
+  ]);
 
   return <PlaybackContext.Provider value={value}>{children}</PlaybackContext.Provider>;
 };

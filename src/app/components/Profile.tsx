@@ -61,6 +61,14 @@ export function Profile({ user, onLogout, onProfileUpdate }: ProfileProps) {
         if (k && k.startsWith('vns_')) keys.push(k);
       }
       keys.forEach((k) => localStorage.removeItem(k));
+      sessionStorage.clear();
+      if ('indexedDB' in window) {
+        indexedDB.databases().then((dbs) => {
+          dbs.forEach((db) => {
+            if (db.name) indexedDB.deleteDatabase(db.name);
+          });
+        }).catch(() => {});
+      }
     } catch {}
   };
 

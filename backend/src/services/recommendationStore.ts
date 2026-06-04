@@ -1,4 +1,5 @@
 import pool from '../db';
+import { dedupeByKey } from '../utils';
 
 type RecommendationCacheRow = {
   firebase_uid: string;
@@ -174,7 +175,7 @@ export const getUserRecentlySeenTrackKeys = async (opts: { uid: string; withinHo
 };
 
 export const markUserSeenTracks = async (opts: { uid: string; items: any[]; reason: string }) => {
-  const values: Array<[string, string, string, string, string]> = [];
+  let values: Array<[string, string, string, string, string]> = [];
   for (const it of opts.items) {
     const youtubeId = String(it?.youtube_id || it?.id || '').trim();
     const source = String(it?.source || '').trim();
@@ -183,6 +184,14 @@ export const markUserSeenTracks = async (opts: { uid: string; items: any[]; reas
     const artistNorm = stableKey(it?.artist || it?.uploader);
     values.push([opts.uid, trackKey, titleNorm, artistNorm, opts.reason]);
   }
+  
+  // Deduplicate before batch insert to avoid PostgreSQL ON CONFLICT error
+  const beforeCount = values.length;
+  values = dedupeByKey(values, (v) => `${v[0]}:${v[1]}`);
+  if (beforeCount !== values.length) {
+    console.log(`[db/batch-dedupe] table=UserSeenTracks before=${beforeCount} after=${values.length} removed=${beforeCount - values.length}`);
+  }
+
   if (values.length === 0) return;
 
   const params: any[] = [];
@@ -345,7 +354,7 @@ export const getPositiveSeeds = async (uid: string, limit = 12) => {
 };
 
 export const upsertGlobalCatalogTracks = async (items: any[], scoreInc = 1) => {
-  const rows = items
+  let rows = items
     .map((it) => {
       const yt = String(it?.youtube_id || it?.id || '').trim();
       const title = String(it?.title || '').trim();
@@ -357,6 +366,13 @@ export const upsertGlobalCatalogTracks = async (items: any[], scoreInc = 1) => {
       return { yt, title, uploader, duration, thumbnail, url };
     })
     .filter(Boolean) as Array<{ yt: string; title: string; uploader: string | null; duration: number | null; thumbnail: string | null; url: string | null }>;
+
+  const beforeCount = rows.length;
+  rows = dedupeByKey(rows, (r) => r.yt);
+  if (beforeCount !== rows.length) {
+    console.log(`[db/batch-dedupe] table=GlobalCatalogTracks before=${beforeCount} after=${rows.length} removed=${beforeCount - rows.length}`);
+  }
+
 
   if (rows.length === 0) return;
 
