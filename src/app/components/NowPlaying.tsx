@@ -11,7 +11,7 @@ import { Slider } from './ui/slider';
 
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { apiFetch } from '../api';
-import { usePlayback } from '../context/PlaybackContext';
+import { usePlayback, getTrackKey } from '../context/PlaybackContext';
 import { trackFromSong } from '../track';
 import { TrackCover } from './TrackCover';
 import { TrackFeedbackMenu } from './TrackFeedbackMenu';
@@ -64,10 +64,10 @@ export function NowPlaying({
     playNextFromQueueIndex: onPlayNext,
     sleepTimerRemainingSec,
     setSleepTimer: onSetSleepTimerMinutes,
-    toggleFavorite,
+    toggleLike,
   } = usePlayback();
 
-  const isLiked = !!currentTrack && favorites.has(currentTrack.id);
+  const isLiked = !!currentTrack && favorites.has(getTrackKey(currentTrack));
   const [prevVolume, setPrevVolume] = useState(volumeProp);
   const touchStartY = useRef<number | null>(null);
   
@@ -787,7 +787,7 @@ export function NowPlaying({
               </div>
               <motion.button
                 whileTap={{ scale: 0.85 }}
-                onClick={() => { if (currentTrack) toggleFavorite(currentTrack); }}
+                onClick={() => { if (currentTrack) toggleLike(currentTrack); }}
                 className={`p-2 rounded-full transition-all ${
                   isLiked ? 'text-fuchsia-500' : 'text-white/40 hover:text-white'
                 }`}

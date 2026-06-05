@@ -3,7 +3,7 @@ import { Play, Pause, Shuffle, Heart, MoreHorizontal, Clock, ArrowLeft, Check, T
 import { motion, AnimatePresence } from 'motion/react';
 import { Playlist, useMusic } from '../context/MusicContext';
 import { formatTotalDuration, formatDuration } from '../utils';
-import { usePlayback } from '../context/PlaybackContext';
+import { usePlayback, getTrackKey } from '../context/PlaybackContext';
 import { trackFromSong } from '../track';
 import { TrackCover } from './TrackCover';
 import { TrackFeedbackMenu } from './TrackFeedbackMenu';
@@ -17,7 +17,7 @@ export function PlaylistDetail({
   playlist: initialPlaylist,
   onBack,
 }: PlaylistDetailProps) {
-  const { currentSong, isPlaying, togglePlay, playSong, favorites, toggleFavoriteSong } = usePlayback();
+  const { currentSong, isPlaying, togglePlay, playSong, favorites, toggleLike } = usePlayback();
   const [playlist, setPlaylist] = useState<Playlist>(initialPlaylist);
   const { fetchPlaylistWithSongs, deletePlaylist } = useMusic();
   
@@ -188,7 +188,7 @@ export function PlaylistDetail({
         {songs.map((song, index) => {
           const isThisSongPlaying = currentSong?.id === song.id;
           const isHovered = hoveredSong === song.id;
-          const isSongLiked = favorites.has(trackFromSong(song).id);
+          const isSongLiked = favorites.has(getTrackKey(song));
 
           return (
             <div
@@ -255,7 +255,7 @@ export function PlaylistDetail({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    toggleFavoriteSong(song);
+                    toggleLike(song);
                   }}
                   className={`transition-all ${
                     isSongLiked

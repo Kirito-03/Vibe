@@ -67,20 +67,38 @@ const isSafeRepairMatch = (originalTrack: any, candidate: any): { score: number,
 
 export const getTrackKey = (track: any): string => {
   if (!track) return '';
-  if (track.youtube_id) return `yt:${track.youtube_id}`;
-  if (track.sourceId) return `src:${track.sourceId}`;
-  if (track.url && !track.url.includes('stream-direct')) return `url:${track.url}`;
-  if (track.audioUrl && !track.audioUrl.includes('stream-direct')) return `audio:${track.audioUrl}`;
+  const ytId = track.youtube_id || track.youtubeId || track.sourceId || track.videoId;
+  if (ytId && String(ytId).trim() !== 'null') return `yt:${ytId}`;
+  
+  if (track.url && !track.url.includes('stream-direct') && track.url !== 'null') {
+    try {
+      const match = track.url.match(/[?&]v=([^&]+)/);
+      if (match && match[1]) return `yt:${match[1]}`;
+    } catch {}
+    return `url:${track.url}`;
+  }
+  
+  if (track.file_url || track.audioUrl) {
+    const u = track.file_url || track.audioUrl;
+    if (u.includes('/api/downloads/stream/')) {
+       const id = u.split('/api/downloads/stream/')[1].split('?')[0];
+       if (id && id !== 'null') return `yt:${id}`;
+    }
+    if (!u.includes('stream-direct') && u !== '/api/downloads/stream/null' && u !== 'null') return `audio:${u}`;
+  }
+  
+  if (track.id && String(track.id).startsWith('dl-') && track.id !== 'dl-null') return `yt:${String(track.id).replace('dl-', '')}`;
+  
   const cleanTitle = (track.title || '').toLowerCase().replace(/official|audio|video|lyric|lyrics|\(.*?\)|\[.*?\]/g, '').trim();
-  const cleanArtist = (track.artist || track.artist_name || '').toLowerCase().trim();
-  return `txt:${cleanTitle}|${cleanArtist}|${track.duration_seconds || 0}`;
+  const cleanArtist = (track.artist || track.artist_name || track.uploader || '').toLowerCase().trim();
+  return `txt:${cleanTitle}|${cleanArtist}|${track.duration_seconds || track.duration || 0}`;
 };
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { getUserStorageKey, cleanupLegacyPlaybackStorage } from '../userStorage';
 import { cleanSourceValue } from '../utils';
 import type { User } from 'firebase/auth';
 import { CapacitorMusicControls } from 'capacitor-music-controls-plugin';
-import { collection, deleteDoc, doc, getDocs, serverTimestamp, setDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDocs, serverTimestamp, setDoc, onSnapshot } from 'firebase/firestore';
 import type { Playlist } from './MusicContext';
 import { useAppSettings } from './AppSettingsContext';
 import { apiFetch, API_BASE } from '../api';
@@ -115,6 +133,7 @@ type PlaybackContextValue = {
   next: (e?: any) => void;
   previous: () => void;
   seek: (progressPct: number) => void;
+  toggleLike: (track: any) => void;
   toggleFavorite: (track: Track) => void;
   toggleFavoriteSong: (song: Song) => void;
   addToQueue: (track: Track) => void;
@@ -278,7 +297,7 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   const sleepTimerTimeoutRef = useRef<number | null>(null);
   const sleepTimerTickRef = useRef<number | null>(null);
 
-  const [likedKeys, setLikedKeys] = useState<Set<string>>(new Set());
+  const [likedTrackKeys, setLikedTrackKeys] = useState<Set<string>>(new Set());
   const songKeyFromId = (songId: number | string) => {
     if (typeof songId === 'string') return songId;
     return `song-${songId}`;
@@ -286,23 +305,18 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
 
   useEffect(() => {
     if (!user) {
-      setLikedKeys(new Set());
+      setLikedTrackKeys(new Set());
       return;
     }
-    getDocs(collection(db, 'users', user.uid, 'likes'))
-      .then((snap) => setLikedKeys(new Set(snap.docs.map((d) => d.id))))
-      .catch(() => setLikedKeys(new Set()));
+    const unsub = onSnapshot(collection(db, 'users', user.uid, 'likes'), (snap) => {
+      setLikedTrackKeys(new Set(snap.docs.map((d) => d.id)));
+    }, (err) => {
+      console.warn('[likes] snapshot error', err);
+    });
+    return () => unsub();
   }, [user]);
 
-  const favorites = useMemo(() => {
-    const toTrackId = (key: string) => {
-      if (key.startsWith('song-')) return `local:${key.slice(5)}`;
-      if (key.startsWith('dl-')) return `downloaded:${key.slice(3)}`;
-      if (key.startsWith('youtube:') || key.startsWith('local:') || key.startsWith('downloaded:') || key.startsWith('external:')) return key;
-      return `external:${key}`;
-    };
-    return new Set(Array.from(likedKeys).map(toTrackId));
-  }, [likedKeys]);
+  const favorites = likedTrackKeys;
 
   const isTooSimilar = (newTitle: string, currentTitle: string) => {
     const normalize = (str: string) => (str || '').toLowerCase().replace(/official|audio|video|lyric|lyrics|\(.*?\)|\[.*?\]/g, '').trim();
@@ -390,46 +404,80 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
     });
   }, [currentTrack, queue, volume, repeatMode, shuffle, persistState]);
 
-  const handleLike = useCallback(async (songId: string | number) => {
+  const toggleLike = useCallback(async (track: any) => {
     const currentUser = auth.currentUser;
     if (!currentUser) return;
 
-    const key = songKeyFromId(songId);
-    const isCurrentlyLiked = likedKeys.has(key);
+    const key = getTrackKey(track);
+    if (!key) {
+      console.warn('[likes] toggle failed reason=no_key', track);
+      return;
+    }
+
+    console.log(`[likes] toggle start trackKey=${key}`);
+    const isCurrentlyLiked = likedTrackKeys.has(key);
     const ref = doc(db, 'users', currentUser.uid, 'likes', key);
 
     if (isCurrentlyLiked) {
-      await deleteDoc(ref);
-      setLikedKeys((prev) => {
+      console.log(`[likes] remove optimistic trackKey=${key}`);
+      setLikedTrackKeys((prev) => {
         const next = new Set(prev);
         next.delete(key);
         return next;
       });
+      try {
+        await deleteDoc(ref);
+        console.log(`[likes] removed trackKey=${key}`);
+      } catch (err) {
+        console.warn(`[likes] failed reason=remove_error`, err);
+        setLikedTrackKeys((prev) => new Set(prev).add(key));
+      }
     } else {
-      const payloadSong = currentSong && songKeyFromId(currentSong.id) === key ? currentSong : null;
-      await setDoc(ref, {
+      console.log(`[likes] add optimistic trackKey=${key}`);
+      setLikedTrackKeys((prev) => new Set(prev).add(key));
+
+      let fileUrl = track.file_url || track.audioUrl || track.url || null;
+      if (fileUrl === '/api/downloads/stream/null') fileUrl = null;
+
+      const ytId = track.youtube_id || track.youtubeId || track.sourceId || track.videoId || null;
+      const title = track.title || null;
+      const artist = track.artist_name || track.artist || track.uploader || null;
+
+      const payload = {
         id: key,
-        song_id: payloadSong?.id ?? songId,
-        title: payloadSong?.title ?? null,
-        artist: payloadSong?.artist_name ?? payloadSong?.artist ?? null,
-        duration_seconds: payloadSong?.duration_seconds ?? null,
-        image_url: payloadSong?.image_url ?? payloadSong?.imageUrl ?? null,
-        file_url: payloadSong?.file_url ?? null,
+        song_id: track.id ?? ytId ?? null,
+        youtube_id: ytId,
+        title: title,
+        artist: artist,
+        duration_seconds: track.duration_seconds ?? track.duration ?? null,
+        image_url: track.image_url ?? track.imageUrl ?? track.thumbnail_url ?? null,
+        file_url: fileUrl,
         updated_at: serverTimestamp(),
-      }, { merge: true });
+        sourceStatus: (!ytId && title && artist) ? 'needs_repair' : 'ok'
+      };
 
-      setLikedKeys((prev) => new Set(prev).add(key));
+      try {
+        await setDoc(ref, payload, { merge: true });
+        console.log(`[likes] saved trackKey=${key}`);
+      } catch (err) {
+        console.warn(`[likes] failed reason=save_error`, err);
+        setLikedTrackKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      }
     }
-  }, [likedKeys, currentSong]);
+  }, [likedTrackKeys]);
 
-  const toggleFavoriteSong = useCallback((song: Song) => {
-    void handleLike(song.id);
-  }, [handleLike]);
+  const handleLike = useCallback(async (songId: string | number) => {
+     // Legacy support
+     if (currentSong && songKeyFromId(currentSong.id) === songKeyFromId(songId)) return toggleLike(currentSong);
+     return toggleLike({ id: songId });
+  }, [currentSong, toggleLike]);
 
-  const toggleFavorite = useCallback((track: Track) => {
-    const legacyId = currentTrack?.id === track.id && currentSong ? currentSong.id : track.sourceId ?? track.id;
-    void handleLike(legacyId);
-  }, [currentSong, currentTrack, handleLike]);
+  const toggleFavoriteSong = useCallback((song: Song) => toggleLike(song), [toggleLike]);
+  const toggleFavorite = useCallback((track: Track) => toggleLike(track), [toggleLike]);
 
   const toStorableFileUrl = (input: string) => {
     if (!input) return '';
@@ -716,8 +764,8 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
           if (!Array.isArray(data) || data.length === 0) return;
 
           let validRecs = data.filter((rec) => !playedIdsRef.current.has(String(rec.youtube_id || rec.id)));
-          let strictRecs = validRecs.filter((rec) => !isTooSimilar(rec.title, seedSong.title));
-          if (strictRecs.length === 0) strictRecs = validRecs;
+          let strictRecs = validRecs.filter((rec) => isLikelyMusicTrack(rec.title, rec.artist || rec.uploader) && !isTooSimilar(rec.title, seedSong.title));
+          if (strictRecs.length === 0) strictRecs = validRecs.filter(rec => isLikelyMusicTrack(rec.title, rec.artist || rec.uploader));
 
           // Process recommendations sequentially, max 3 per expansion, to prevent
           // parallel POST /api/downloads that cause ON CONFLICT race in PostgreSQL.
@@ -1256,8 +1304,8 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
                   const data: any[] = Array.isArray(json) ? json : Array.isArray(json?.items) ? json.items : [];
                   if (!Array.isArray(data) || data.length === 0) return;
                   let validRecs = data.filter((rec) => !playedIdsRef.current.has(String(rec.youtube_id || rec.id)));
-                  let strictRecs = validRecs.filter((rec) => !isTooSimilar(rec.title, seedSong.title));
-                  if (strictRecs.length === 0) strictRecs = validRecs;
+                  let strictRecs = validRecs.filter((rec) => isLikelyMusicTrack(rec.title, rec.artist || rec.uploader) && !isTooSimilar(rec.title, seedSong.title));
+                  if (strictRecs.length === 0) strictRecs = validRecs.filter(rec => isLikelyMusicTrack(rec.title, rec.artist || rec.uploader));
 
                   // Process sequentially, max 3, with dedup to prevent DB race
                   let downloadedCount = 0;
@@ -1926,6 +1974,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     next,
     previous,
     seek,
+    toggleLike,
     toggleFavorite,
     toggleFavoriteSong,
     addToQueue,
@@ -1945,7 +1994,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
   }), [
     currentTrack, queue, isPlaying, volume, progress, duration, repeatMode,
     shuffle, favorites, playbackError, preparingTrackKey, playingTrackKey, playbackErrorTrackKey, playSong, playTrack, pause,
-    resume, next, previous, seek, toggleFavorite, toggleFavoriteSong, addToQueue,
+    resume, next, previous, seek, toggleLike, toggleFavorite, toggleFavoriteSong, addToQueue,
     removeFromQueue, clearQueue, setSleepTimer, setVolume, togglePlay,
     toggleShuffle, cycleRepeat, reorderQueue, playNextFromQueueIndex, reset,
     sleepTimerRemainingSec, currentSong, currentPlaylist

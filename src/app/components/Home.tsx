@@ -185,7 +185,8 @@ export function Home({
         
         const uniqueSongs = new Map<string, Song>();
         finalSongs.forEach(s => {
-           if (!uniqueSongs.has(s.id)) uniqueSongs.set(s.id, s);
+           const idStr = String(s.id);
+           if (!uniqueSongs.has(idStr)) uniqueSongs.set(idStr, s);
         });
         
         const songs = Array.from(uniqueSongs.values()).filter((s) => Boolean(s.title) && Boolean(s.file_url));

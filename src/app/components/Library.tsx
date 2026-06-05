@@ -4,7 +4,7 @@ import { useMusic, Playlist } from '../context/MusicContext';
 import { Song } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { onAuthStateChanged } from 'firebase/auth';
-import { collection, getDocs, limit, orderBy, query } from 'firebase/firestore';
+import { collection, getDocs, limit, orderBy, query, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../../firebaseConfig';
 import { API_BASE } from '../api';
 import { TrackCover } from './TrackCover';
@@ -120,41 +120,46 @@ export function Library({ currentSong, isPlaying, onPlaylistClick, onSongPlay, t
       };
     };
 
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    let unsubLikes: (() => void) | undefined;
+    let unsubRecents: (() => void) | undefined;
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (!user) {
         setLikedSongs([]);
         setHistory([]);
+        if (unsubLikes) unsubLikes();
+        if (unsubRecents) unsubRecents();
         return;
       }
 
-      try {
-        const likesSnap = await getDocs(collection(db, 'users', user.uid, 'likes'));
+      unsubLikes = onSnapshot(collection(db, 'users', user.uid, 'likes'), (likesSnap) => {
         const likes = likesSnap.docs
           .map((d) => songFromDoc(d.id, d.data()))
           .filter((s): s is Song => Boolean(s));
         setLikedSongs(likes);
-      } catch {
-        setLikedSongs([]);
-      }
+      }, () => setLikedSongs([]));
 
-      try {
-        const recentsSnap = await getDocs(
-          query(
-            collection(db, 'users', user.uid, 'recents'),
-            orderBy('played_at', 'desc'),
-            limit(50)
-          )
-        );
-        const recents = recentsSnap.docs
-          .map((d) => songFromDoc(d.id, d.data()))
-          .filter((s): s is Song => Boolean(s));
-        setHistory(recents);
-      } catch {
-        setHistory([]);
-      }
+      unsubRecents = onSnapshot(
+        query(
+          collection(db, 'users', user.uid, 'recents'),
+          orderBy('played_at', 'desc'),
+          limit(50)
+        ),
+        (recentsSnap) => {
+          const recents = recentsSnap.docs
+            .map((d) => songFromDoc(d.id, d.data()))
+            .filter((s): s is Song => Boolean(s));
+          setHistory(recents);
+        },
+        () => setHistory([])
+      );
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (unsubLikes) unsubLikes();
+      if (unsubRecents) unsubRecents();
+    };
   }, []);
 
   const tabs: { id: Tab; icon: typeof ListMusic; label: string }[] = [

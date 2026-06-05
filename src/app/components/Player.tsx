@@ -5,7 +5,7 @@ import {
 import { Slider } from './ui/slider';
 import { useState } from 'react';
 import { motion } from 'motion/react';
-import { usePlayback } from '../context/PlaybackContext';
+import { usePlayback, getTrackKey } from '../context/PlaybackContext';
 import { TrackCover } from './TrackCover';
 import { TrackFeedbackMenu } from './TrackFeedbackMenu';
 
@@ -47,10 +47,10 @@ export function Player({
     setVolume: onVolumeChange,
     toggleShuffle: onToggleShuffle,
     cycleRepeat: onCycleRepeat,
-    toggleFavorite,
+    toggleLike,
   } = usePlayback();
 
-  const isLiked = !!currentTrack && favorites.has(currentTrack.id);
+  const isLiked = !!currentTrack && favorites.has(getTrackKey(currentTrack));
   const [prevVolume, setPrevVolume] = useState(volume);
   const img = song?.imageUrl ?? song?.image_url ?? DEFAULT_IMG;
   const title  = song?.title ?? 'Elige una canción';
@@ -66,7 +66,7 @@ export function Player({
   }
 
   const handleLike = () => {
-    if (currentTrack) toggleFavorite(currentTrack);
+    if (currentTrack) toggleLike(currentTrack);
   };
 
   const toggleMute = () => {
