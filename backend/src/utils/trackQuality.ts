@@ -11,7 +11,8 @@ export function isLikelyMusicTrack(title: string | undefined | null, artist: str
     'ableton tutorial', 'logic pro tutorial', 'pro tools tutorial', 'cubase tutorial', 
     'mixing tutorial', 'mastering tutorial', 'microphone setup', 'sound test', 
     'demo', 'sample pack', 'type beat', 'free beat', 'unboxing', 'gameplay', 
-    'walkthrough', 'chapter', 'full episode', 'vlog', 'luna -', 'studio mix setup guide'
+    'walkthrough', 'chapter', 'full episode', 'vlog', 'studio mix setup guide',
+    'universal audio luna'
   ];
 
   for (const k of toxicKeywords) {
@@ -44,13 +45,17 @@ export function rankForYouCandidate(profile: any, candidate: any): number {
     score += 50;
     matchedProfile = true;
   }
-  if (profile?.likedTracks?.some((t: string) => title.includes(t.toLowerCase()))) {
+  if (profile?.likedTracks?.some((t: string) => title.includes(t.toLowerCase()) || artist.includes(t.toLowerCase()))) {
     score += 30;
+    matchedProfile = true;
+  }
+  if (profile?.recentSearches?.some((s: string) => title.includes(s.toLowerCase()) || artist.includes(s.toLowerCase()))) {
+    score += 20;
     matchedProfile = true;
   }
   
   if (!matchedProfile && profile?.topArtists?.length > 0) {
-    score -= 30; // Not matching any of their top artists or likes when personalized
+    score -= 50; // Not matching any of their top artists or likes when personalized
   }
 
   // Penalties for weird versions if not explicitly requested
@@ -67,7 +72,7 @@ export function rankForYouCandidate(profile: any, candidate: any): number {
   }
 
   // Penalize lyrics if "official audio" is available in another result (we just penalize lyrics slightly)
-  if (title.includes('lyrics') || title.includes('letra')) {
+  if (title.includes('lyrics') || title.includes('letra') || title.includes('lyric')) {
     score -= 15;
   }
 
@@ -79,8 +84,21 @@ export function rankForYouCandidate(profile: any, candidate: any): number {
   }
 
   // Penalize bad uploaders strongly just in case
-  if (artist.includes('university') || artist.includes('tutorial') || artist.includes('software')) {
-    score -= 500;
+  if (artist.includes('university') || artist.includes('tutorial') || artist.includes('software') || artist.includes('audio university')) {
+    score -= 1000;
+  }
+  const severeToxic = ['guide', 'tutorial', 'setup', 'mixer', 'software'];
+  for (const t of severeToxic) {
+     if (title.includes(t)) score -= 1000;
+  }
+
+  if (candidate.globalCatalogScore) {
+    score += (candidate.globalCatalogScore / 10);
+  }
+
+  // Penalize recently seen
+  if (candidate.seenRecently) {
+    score -= 30;
   }
 
   return score;

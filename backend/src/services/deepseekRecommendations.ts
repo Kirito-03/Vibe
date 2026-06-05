@@ -197,6 +197,7 @@ export const generateMusicSeedsWithDeepSeek = async (profile: MusicTasteProfile)
     'No incluyas URLs.',
     'Máximo 8 queries, sin duplicados, prioriza relación con el historial.',
     'Evita contenido explícito innecesario.',
+    'Genera consultas para encontrar canciones reales, official audio/video, no tutoriales, no podcasts, no software, no cursos.',
     'Formato de salida: {"queries":["..."]}',
   ].join('\n');
 
@@ -239,7 +240,13 @@ export const generateMusicSeedsWithDeepSeek = async (profile: MusicTasteProfile)
       return null;
     }
 
-    const finalQueries = dedupeAndLimit(queries, cfg.maxQueries);
+    let finalQueries = dedupeAndLimit(queries, cfg.maxQueries);
+    finalQueries = finalQueries.filter((q: string) => {
+      const lower = q.toLowerCase();
+      const banned = ['tutorial', 'setup', 'guide', 'mixer', 'audio university', 'software', 'course'];
+      return !banned.some(b => lower.includes(b));
+    });
+
     deepseekCache.set(cacheKey, { expiresAt: now + cfg.cacheTtlMs, queries: finalQueries });
     console.log('[deepseek/recommendations] queries', { queries: finalQueries.length, cached: false });
     return finalQueries;
@@ -268,10 +275,12 @@ export const buildPersonalizedSeeds = (profile: any, maxQueries = 12) => {
   const likedTracks = Array.isArray(profile?.likedTracks) ? profile.likedTracks : [];
   
   if (artists.length > 0) {
-    raw.push(`${artists[0]} hits official audio`);
     raw.push(`${artists[0]} official audio`);
-    if (artists.length > 1) raw.push(`${artists[1]} official audio`);
-    if (artists.length > 2) raw.push(`similar to ${artists[0]} ${artists[1]} official audio`);
+    raw.push(`${artists[0]} hits official audio`);
+    if (artists.length > 1) {
+       raw.push(`${artists[0]} ${artists[1]} official audio`);
+       raw.push(`similar to ${artists[0]} official audio`);
+    }
   }
   
   for (const t of recentTracks.slice(0, 3)) raw.push(`${t} official audio`);

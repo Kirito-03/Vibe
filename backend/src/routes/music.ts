@@ -12,6 +12,7 @@ import { normalizeSearchQuery, normalizeText as normalizeSearchText, rankSearchR
 import { rerankWithDeepSeek, isSearchRerankEnabled } from '../services/searchDeepseekRerank';
 import { asyncHandler } from '../utils';
 
+import { isLikelyMusicTrack, rankForYouCandidate } from '../utils/trackQuality';
 import { rankRecommendationResults } from '../services/recommendationRanking';
 import {
   clearUserRecommendationCache,
@@ -194,6 +195,8 @@ const dedupeAndFilterItems = (
   return { items: out, dedupedCount: items.length - out.length, skippedDuplicates };
 };
 const isNonMusicTitle = (title: string, uploader?: string) => {
+  if (!isLikelyMusicTrack(title, uploader)) return true;
+
   const t = normalizeText(title);
   const u = normalizeText(uploader);
   if (!t) return true;
@@ -930,8 +933,6 @@ router.get('/for-you', asyncHandler(async (req, res) => {
       }
     }
 
-    for (const t of defaultForYouTerms) candidates.push({ q: t, source: 'default-search' });
-
     let profile: MusicTasteProfile | null = null;
     let profileHash = '';
     let positiveSeeds: string[] = [];
@@ -991,6 +992,10 @@ router.get('/for-you', asyncHandler(async (req, res) => {
       const pSeeds = buildPersonalizedSeeds(profile);
       for (const s of pSeeds) {
          candidates.push({ q: s, source: 'personalized' });
+      }
+
+      if (positiveSeeds.length === 0 && recentTracks.length === 0) {
+        for (const t of defaultForYouTerms) candidates.push({ q: t, source: 'default-search' });
       }
 
       const localQs = candidates.map((c) => c.q);
@@ -1091,6 +1096,10 @@ router.get('/for-you', asyncHandler(async (req, res) => {
       } catch (error) {
         console.warn('[music/for-you] cache read failed', { reqId, uid: uid ? 'yes' : 'no', error: serializeError(error) });
       }
+    }
+
+    if (!uid) {
+      for (const t of defaultForYouTerms) candidates.push({ q: t, source: 'default-search' });
     }
 
     let ytResults: any[] = [];
@@ -1231,7 +1240,14 @@ router.get('/for-you', asyncHandler(async (req, res) => {
       }
     }
 
-    finalHealed = rankRecommendationResults({ seed: rawSeed || usedQuery, items: finalHealed, profile });
+    finalHealed = finalHealed
+      .map(r => ({ ...r, forYouScore: rankForYouCandidate(profile, r) }))
+      .filter(r => r.forYouScore > -300)
+      .sort((a, b) => b.forYouScore - a.forYouScore)
+      .map(r => {
+        const { forYouScore, ...rest } = r;
+        return rest;
+      });
 
     const response: any = {
       items: finalHealed,
