@@ -423,16 +423,10 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   }, [likedKeys, currentSong]);
 
   const toggleFavoriteSong = useCallback((song: Song) => {
-    setPlaybackError(null);
-      setPlaybackErrorTrackKey(null);
-    emitListeningEvent(song, 'play_start');
     void handleLike(song.id);
   }, [handleLike]);
 
   const toggleFavorite = useCallback((track: Track) => {
-    setPlaybackError(null);
-      setPlaybackErrorTrackKey(null);
-    emitListeningEvent(song, 'play_start');
     const legacyId = currentTrack?.id === track.id && currentSong ? currentSong.id : track.sourceId ?? track.id;
     void handleLike(legacyId);
   }, [currentSong, currentTrack, handleLike]);
@@ -548,13 +542,13 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
 
          console.debug("[playback/repair] repaired track", {
            oldId: track.id,
-           oldYoutubeId: track.youtubeId,
-           newYoutubeId: repairedTrack.youtubeId,
+           oldYoutubeId: track.youtube_id,
+           newYoutubeId: repairedTrack.youtube_id,
            title: repairedTrack.title,
            artist: repairedTrack.artist,
          });
          
-         console.log(`[playback/repair] build playable track oldYoutubeId=${track.youtubeId || 'null'} newYoutubeId=${repairedTrack.youtubeId}`);
+         console.log(`[playback/repair] build playable track oldYoutubeId=${track.youtube_id || 'null'} newYoutubeId=${repairedTrack.youtube_id}`);
          
          setCurrentSong(repairedTrack);
          
@@ -617,7 +611,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     sentEventsRef.current[key].add(eventType);
 
     const progress = audioRef.current?.currentTime || 0;
-    const duration = audioRef.current?.duration || song.duration_seconds || song.duration || 0;
+    const duration = audioRef.current?.duration || (song as any).duration_seconds || song.duration || 0;
     const progressPercent = duration > 0 ? Math.round((progress / duration) * 100) : 0;
 
     apiFetch('/api/music/listening-event', {
@@ -626,7 +620,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
       body: JSON.stringify({
         youtubeId: (song as any).youtube_id || (song.source === 'youtube' ? song.id : null),
         title: song.title,
-        artist: song.artist || song.artist_name || null,
+        artist: song.artist || (song as any).artist_name || null,
         duration: duration || null,
         listenedSeconds: Math.round(progress) || null,
         progressPercent: progressPercent || null,
@@ -638,8 +632,6 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
 
   const playSongInternal = useCallback(async (song: Song, playlist?: Playlist, isCrossfade = false, opts?: { userInitiated?: boolean, forcePlay?: boolean, fromQueueNavigation?: boolean }) => {
     setPlaybackError(null);
-      setPlaybackErrorTrackKey(null);
-    emitListeningEvent(song, 'play_start');
     setPlaybackErrorTrackKey(null);
     emitListeningEvent(song, 'play_start');
     lastUserInitiatedRef.current = Boolean(opts?.userInitiated);
@@ -896,9 +888,6 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     const isMyGen = () => playGenRef.current === myGen;
     if (!finalAudioUrl || finalAudioUrl.includes('youtube.com') || finalAudioUrl.includes('youtu.be') || finalAudioUrl.includes('stream-direct')) {
       
-      setPlaybackError(null);
-      setPlaybackErrorTrackKey(null);
-    emitListeningEvent(song, 'play_start');
       console.log('[playback/prepare] start');
       try {
         const ytId = cleanSourceValue(song.youtube_id || (song as any).sourceId || (song as any).videoId);
@@ -911,7 +900,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
               console.debug(`[playback/repair] start reason=MISSING_TRACK_SOURCE_CLIENT`);
               const repairedSong = await repairTrack(song);
               if (repairedSong && isMyGen()) {
-                console.log(`[playback/repair] retry prepare with repairedTrack youtubeId=${repairedSong.youtube_id || repairedSong.youtubeId}`);
+                console.log(`[playback/repair] retry prepare with repairedTrack youtubeId=${repairedSong.youtube_id}`);
                 playSongInternal(repairedSong, playlist, isCrossfade, opts);
                 return;
               }
@@ -1600,15 +1589,14 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     if (prevSong) {
        playSong(prevSong, currentPlaylist, false, { forcePlay: true, fromQueueNavigation: true });
     } else {
-       if (audioRef.current) if (audioRef.current) audioRef.current.currentTime = 0;
-       audioRef.current.play().catch(() => {});
+       if (audioRef.current) {
+         audioRef.current.currentTime = 0;
+         audioRef.current.play().catch(() => {});
+       }
     }
   }, [currentPlaylist, currentSong, playSong, shuffle]);
 
   const reorderQueue = useCallback((tracks: Track[]) => {
-    setPlaybackError(null);
-      setPlaybackErrorTrackKey(null);
-    emitListeningEvent(song, 'play_start');
     setCurrentPlaylist((prev) => {
       const base: Playlist = prev || { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: [] };
       let songs = tracks.map(songFromTrack);
@@ -1626,9 +1614,6 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
   }, []);
 
   const removeFromQueue = useCallback((index: number) => {
-    setPlaybackError(null);
-      setPlaybackErrorTrackKey(null);
-    emitListeningEvent(song, 'play_start');
     setCurrentPlaylist((prev) => {
       if (!prev?.songs) return prev;
       const songs = [...prev.songs];
@@ -1650,9 +1635,6 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
   }, [currentSong]);
 
   const addToQueue = useCallback((track: Track) => {
-    setPlaybackError(null);
-      setPlaybackErrorTrackKey(null);
-    emitListeningEvent(song, 'play_start');
     setCurrentPlaylist((prev) => {
       const base: Playlist = prev || { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: currentSong ? [currentSong] : [] };
       return { ...base, songs: [...(base.songs || []), songFromTrack(track)] };
@@ -1660,9 +1642,6 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
   }, [currentSong]);
 
   const clearQueue = useCallback(() => {
-    setPlaybackError(null);
-      setPlaybackErrorTrackKey(null);
-    emitListeningEvent(song, 'play_start');
     setCurrentPlaylist((prev) => {
       const base: Playlist = prev || { id: `queue-${Date.now()}`, name: 'Cola', description: '', image_url: '', songs: [] };
       return { ...base, songs: currentSong ? [currentSong] : [] };
@@ -1670,9 +1649,6 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
   }, [currentSong]);
 
   const playTrack = useCallback((track: Track, opts?: { queue?: Track[] }) => {
-    setPlaybackError(null);
-      setPlaybackErrorTrackKey(null);
-    emitListeningEvent(song, 'play_start');
     if (!track.audioUrl) {
       setPlaybackError('No hay audio disponible para reproducir esta canción.');
       return;
@@ -1686,9 +1662,6 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
   const resume = useCallback(() => { if (!isPlaying) togglePlay(); }, [isPlaying, togglePlay]);
 
   const reset = useCallback(() => {
-    setPlaybackError(null);
-      setPlaybackErrorTrackKey(null);
-    emitListeningEvent(song, 'play_start');
     clearSleepTimer();
     autoplayBusyRef.current = false;
     expandingQueueRef.current = false;
