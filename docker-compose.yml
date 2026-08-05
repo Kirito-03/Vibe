@@ -35,8 +35,8 @@ services:
         VITE_IMGBB_KEY: ${VITE_IMGBB_KEY}
     container_name: vns_frontend
     restart: unless-stopped
-    ports:
-      - "80:80"
+    expose:
+      - "80"
     networks:
       - internal
     volumes:
