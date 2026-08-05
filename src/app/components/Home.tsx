@@ -68,6 +68,21 @@ export function Home({
   const lastSeenMarkRef = useRef<string>('');
   const [activePill, setActivePill] = useState('Todo');
 
+  const recentRef = useRef<HTMLDivElement>(null);
+  const paraTiRef = useRef<HTMLDivElement>(null);
+  const descubreRef = useRef<HTMLDivElement>(null);
+
+  const scroll = (ref: React.RefObject<HTMLDivElement>, direction: 'left' | 'right') => {
+    if (ref.current) {
+      const { scrollLeft, clientWidth } = ref.current;
+      const scrollAmount = clientWidth * 0.8;
+      ref.current.scrollTo({
+        left: direction === 'left' ? scrollLeft - scrollAmount : scrollLeft + scrollAmount,
+        behavior: 'smooth'
+      });
+    }
+  };
+
   useEffect(() => {
     if (!user) {
       home.clearHomeDataCache();
@@ -530,19 +545,30 @@ export function Home({
           </section>
         )}
 
+        {/* Estilo CSS inyectado para ocultar scrollbars */}
+        <style>{`
+          .no-scrollbar::-webkit-scrollbar {
+            display: none;
+          }
+        `}</style>
+
         {/* Escuchado Recientemente */}
         {history.length > 1 && (
           <section className="mb-10">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[13px] font-bold tracking-[2px] text-zinc-300 uppercase border-l-2 border-[#a855f7] pl-3">Escuchado recientemente</h3>
               <div className="flex items-center gap-2">
-                <button className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronLeft className="w-5 h-5" /></button>
-                <button className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronRight className="w-5 h-5" /></button>
+                <button onClick={() => scroll(recentRef, 'left')} className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronLeft className="w-5 h-5" /></button>
+                <button onClick={() => scroll(recentRef, 'right')} className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronRight className="w-5 h-5" /></button>
               </div>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              {history.slice(1, 7).map((song) => (
-                <div key={song.id} onClick={() => onSongPlay(song as any)} className="bg-transparent cursor-pointer group">
+            <div 
+              ref={recentRef}
+              className="flex gap-4 overflow-x-auto scroll-smooth no-scrollbar pb-2"
+              style={{ scrollbarWidth: 'none' }}
+            >
+              {history.slice(1, 20).map((song) => (
+                <div key={song.id} onClick={() => onSongPlay(song as any)} className="w-32 sm:w-40 md:w-44 flex-shrink-0 cursor-pointer group">
                   <div className="relative aspect-square mb-3 overflow-hidden shadow-lg">
                     <img src={song.image_url || song.imageUrl} alt={song.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
@@ -562,18 +588,22 @@ export function Home({
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-[13px] font-bold tracking-[2px] text-zinc-300 uppercase border-l-2 border-[#a855f7] pl-3">Para ti</h3>
             <div className="flex items-center gap-2">
-              <button className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronLeft className="w-5 h-5" /></button>
-              <button className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronRight className="w-5 h-5" /></button>
+              <button onClick={() => scroll(paraTiRef, 'left')} className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronLeft className="w-5 h-5" /></button>
+              <button onClick={() => scroll(paraTiRef, 'right')} className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronRight className="w-5 h-5" /></button>
             </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-            {randomPicks.slice(0, 4).map((d: any) => {
+          <div 
+            ref={paraTiRef}
+            className="flex gap-4 overflow-x-auto scroll-smooth no-scrollbar pb-2"
+            style={{ scrollbarWidth: 'none' }}
+          >
+            {randomPicks.slice(0, 20).map((d: any) => {
               const song = {
                 id: d.id, title: d.title, artist: d.artist || 'Internet',
                 imageUrl: d.thumbnail_url || '', source: 'youtube', youtube_id: d.youtube_id || d.id
               } as Song;
               return (
-                <div key={d.id} onClick={() => handleResultClick(d, song, false)} className="cursor-pointer group">
+                <div key={d.id} onClick={() => handleResultClick(d, song, false)} className="w-32 sm:w-40 md:w-44 flex-shrink-0 cursor-pointer group">
                   <div className="aspect-square relative overflow-hidden shadow-lg">
                     <img src={song.imageUrl} alt={song.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
@@ -593,18 +623,22 @@ export function Home({
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-[13px] font-bold tracking-[2px] text-zinc-300 uppercase border-l-2 border-[#a855f7] pl-3">Descubre nueva música</h3>
             <div className="flex items-center gap-2">
-              <button className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronLeft className="w-5 h-5" /></button>
-              <button className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronRight className="w-5 h-5" /></button>
+              <button onClick={() => scroll(descubreRef, 'left')} className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronLeft className="w-5 h-5" /></button>
+              <button onClick={() => scroll(descubreRef, 'right')} className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronRight className="w-5 h-5" /></button>
             </div>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-            {recommendations.slice(0, 6).map((d: any) => {
+          <div 
+            ref={descubreRef}
+            className="flex gap-4 overflow-x-auto scroll-smooth no-scrollbar pb-2"
+            style={{ scrollbarWidth: 'none' }}
+          >
+            {recommendations.slice(0, 20).map((d: any) => {
               const song = {
                 id: d.id, title: d.title, artist: d.artist || 'Internet',
                 imageUrl: d.thumbnail_url || '', source: 'youtube', youtube_id: d.youtube_id || d.id
               } as Song;
               return (
-                <div key={d.id} onClick={() => handleResultClick(d, song, false)} className="bg-transparent cursor-pointer group">
+                <div key={d.id} onClick={() => handleResultClick(d, song, false)} className="w-32 sm:w-40 md:w-44 flex-shrink-0 cursor-pointer group">
                   <div className="relative aspect-square mb-3 overflow-hidden shadow-lg">
                     <img src={song.imageUrl} alt={song.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
