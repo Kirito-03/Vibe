@@ -2,64 +2,80 @@ import { motion } from 'motion/react';
 
 export function LoadingScreen() {
   return (
-    <div className="h-screen w-full bg-gradient-to-br from-violet-950 via-black to-fuchsia-950/30 flex items-center justify-center overflow-hidden">
-      {/* Background animated orbs */}
-      <div className="absolute inset-0 overflow-hidden">
-        <motion.div
-          className="absolute w-96 h-96 rounded-full bg-violet-600/10 blur-[100px]"
-          animate={{ x: [0, 100, 0], y: [0, -50, 0] }}
-          transition={{ duration: 8, repeat: Infinity, ease: 'easeInOut' }}
-          style={{ top: '10%', left: '20%' }}
-        />
-        <motion.div
-          className="absolute w-80 h-80 rounded-full bg-fuchsia-600/10 blur-[100px]"
-          animate={{ x: [0, -80, 0], y: [0, 60, 0] }}
-          transition={{ duration: 10, repeat: Infinity, ease: 'easeInOut' }}
-          style={{ bottom: '15%', right: '15%' }}
-        />
+    <div 
+      className="h-screen w-full flex flex-col items-center justify-center relative overflow-hidden" 
+      style={{ background: 'linear-gradient(168deg, #1e0a3c 0%, #080010 100%)' }}
+    >
+      {/* Background scattered notes (similar to login page) */}
+      <div className="absolute inset-0 pointer-events-none opacity-30">
+        <motion.span 
+          className="absolute text-3xl text-purple-300" 
+          animate={{ y: [0, -15, 0], opacity: [0.5, 0.8, 0.5] }} 
+          transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }} 
+          style={{ top: '25%', left: '20%', rotate: '12deg' }}
+        >♪</motion.span>
+        <motion.span 
+          className="absolute text-5xl text-purple-300" 
+          animate={{ y: [0, -25, 0], opacity: [0.3, 0.7, 0.3] }} 
+          transition={{ duration: 5.5, repeat: Infinity, ease: "easeInOut", delay: 1 }} 
+          style={{ top: '65%', left: '15%', rotate: '-15deg' }}
+        >♫</motion.span>
+        <motion.span 
+          className="absolute text-2xl text-purple-300" 
+          animate={{ y: [0, -12, 0], opacity: [0.4, 0.9, 0.4] }} 
+          transition={{ duration: 3.5, repeat: Infinity, ease: "easeInOut", delay: 0.5 }} 
+          style={{ top: '35%', right: '25%', rotate: '25deg' }}
+        >♩</motion.span>
+        <motion.span 
+          className="absolute text-4xl text-purple-300" 
+          animate={{ y: [0, -20, 0], opacity: [0.6, 1, 0.6] }} 
+          transition={{ duration: 6, repeat: Infinity, ease: "easeInOut", delay: 2 }} 
+          style={{ bottom: '25%', right: '20%', rotate: '-8deg' }}
+        >♬</motion.span>
       </div>
 
-      <div className="text-center relative z-10">
-        {/* Logo */}
+      <div className="relative z-10 flex flex-col items-center">
+        {/* Logo and Brand */}
         <motion.div
-          initial={{ scale: 0, rotate: -180 }}
-          animate={{ scale: 1, rotate: 0 }}
-          transition={{ type: 'spring', damping: 12, stiffness: 120 }}
-          className="mb-8"
+          initial={{ opacity: 0, scale: 0.9, y: -20 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
+          className="flex flex-col items-center gap-6 mb-12"
         >
-          <div className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto shadow-2xl shadow-violet-500/30">
-            <img src="/ico.png" alt="Logo" className="w-20 h-20 object-contain" />
-          </div>
-        </motion.div>
-        
-        {/* Title */}
-        <motion.div
-          initial={{ y: 30, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.4, duration: 0.6 }}
-        >
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-violet-300 via-fuchsia-300 to-violet-300 bg-clip-text text-transparent mb-2">
-            Vibe
-          </h1>
-          <p className="text-sm text-zinc-500 tracking-widest uppercase">Tu mundo musical</p>
+          <img src="/ico.png" alt="Vibe" className="w-20 h-20 filter brightness-200" />
+          <span className="text-4xl font-bold text-white tracking-[8px]">VIBE</span>
         </motion.div>
 
-        {/* Equalizer bars */}
+        {/* Equalizer Loader */}
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ delay: 0.8, duration: 0.5 }}
-          className="flex gap-1 justify-center mt-8 items-end h-8"
+          transition={{ delay: 1, duration: 0.8 }}
+          className="flex items-end gap-1.5 h-16"
         >
-          {[0, 0.1, 0.2, 0.3, 0.4].map((delay, i) => (
+          {[...Array(14)].map((_, i) => (
             <motion.div
               key={i}
-              animate={{ height: ['8px', `${20 + i * 4}px`, '8px'] }}
-              transition={{ repeat: Infinity, duration: 0.7, delay, ease: 'easeInOut' }}
-              className="w-1 rounded-full bg-gradient-to-t from-violet-500 to-fuchsia-400"
+              className={`w-2 rounded-full ${i % 2 === 0 ? 'bg-fuchsia-500' : 'bg-purple-400'}`}
+              animate={{ height: ['8px', '48px', '8px'] }}
+              transition={{
+                duration: 1 + Math.random() * 0.6,
+                repeat: Infinity,
+                delay: i * 0.1,
+                ease: "easeInOut"
+              }}
             />
           ))}
         </motion.div>
+        
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1.5, duration: 0.8 }}
+          className="text-purple-300/60 text-sm tracking-[3px] uppercase mt-8 font-semibold"
+        >
+          Tu música, tu momento
+        </motion.p>
       </div>
     </div>
   );

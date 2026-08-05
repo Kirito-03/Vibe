@@ -1,7 +1,5 @@
 import { useState } from 'react';
-import { Loader2 } from 'lucide-react';
-import { Button } from './ui/button';
-import { Input } from './ui/input';
+import { Eye, EyeOff } from 'lucide-react';
 import { auth } from '../../firebaseConfig';
 import { GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithCredential, sendPasswordResetEmail } from 'firebase/auth';
 import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
@@ -14,22 +12,32 @@ interface LoginProps {
 export function Login({ onLogin }: LoginProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSocialLoading, setIsSocialLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     setError(null);
+
+    if (isSignUp && password !== confirmPassword) {
+      setError("Las contraseñas no coinciden.");
+      setIsSubmitting(false);
+      return;
+    }
+
     try {
       if (isSignUp) {
         await createUserWithEmailAndPassword(auth, email, password);
       } else {
         await signInWithEmailAndPassword(auth, email, password);
       }
-      // onLogin() no es necesario aquí, el observador en App.tsx se encargará del resto.
     } catch (error: any) {
       console.error("Error de autenticación:", error);
       if (error.code === 'auth/invalid-credential' || error.code === 'auth/wrong-password' || error.code === 'auth/user-not-found') {
@@ -43,8 +51,6 @@ export function Login({ onLogin }: LoginProps) {
       setIsSubmitting(false);
     }
   };
-
-  const [resetMessage, setResetMessage] = useState<string | null>(null);
 
   const handleForgotPassword = async () => {
     if (!email) {
@@ -96,8 +102,7 @@ export function Login({ onLogin }: LoginProps) {
         setError("El proceso de inicio de sesión fue cancelado.");
       } else if (error.code === 'auth/cancelled-popup-request') {
         // No mostrar error si simplemente se canceló
-      }
-      else {
+      } else {
         setError("No se pudo iniciar sesión con Google. Inténtalo de nuevo.");
       }
     } finally {
@@ -105,190 +110,263 @@ export function Login({ onLogin }: LoginProps) {
     }
   };
 
+  const switchTab = (signUp: boolean) => {
+    setIsSignUp(signUp);
+    setError(null);
+    setResetMessage(null);
+  };
+
+  const isDisabled = isSubmitting || isSocialLoading;
+
   return (
-    <div className="h-screen w-full bg-gradient-to-br from-violet-950 via-black to-fuchsia-950/30 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        {/* Logo y Header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-3 mb-4">
-            <img src="/ico.png" alt="Vibe Logo" className="w-12 h-12" />
-            <h1 className="text-4xl font-bold text-white">Vibe</h1>
-          </div>
-          <p className="text-zinc-400 text-lg">
-            {isSignUp ? 'Crea tu cuenta y empieza a escuchar' : 'Inicia sesión en tu cuenta'}
-          </p>
+    <div className="login-page">
+      {/* ── Panel Izquierdo: Branding ── */}
+      <aside className="login-left-panel">
+        {/* Elementos decorativos de fondo para llenar el panel morado */}
+        <div className="login-purple-blob login-purple-blob--1" />
+        <div className="login-purple-blob login-purple-blob--2" />
+
+        <div className="login-brand">
+          <img src="/ico.png" alt="Vibe" className="login-brand-icon" />
+          <span className="login-brand-name">VIBE</span>
         </div>
 
-        {/* Formulario */}
-        <div className="bg-black border border-zinc-800 rounded-lg p-8 shadow-2xl">
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-zinc-300 mb-2">
-                Email
-              </label>
-              <Input
-                id="email"
+        {/* Abstract Vinyl / Soundwave Graphic to fill empty space */}
+        <div className="login-vinyl-graphic">
+          <div className="vinyl-ring vinyl-ring-1" />
+          <div className="vinyl-ring vinyl-ring-2" />
+          <div className="vinyl-ring vinyl-ring-3" />
+          <div className="vinyl-center">
+            <div className="vinyl-dot" />
+          </div>
+          {/* Floating musical notes around the vinyl */}
+          <span className="vinyl-note vinyl-note-1">♪</span>
+          <span className="vinyl-note vinyl-note-2">♫</span>
+          <span className="vinyl-note vinyl-note-3">♬</span>
+        </div>
+
+        <div className="login-hero-text">
+          <h1 className="login-hero-line1">SIENTE</h1>
+          <h1 className="login-hero-line2">CADA</h1>
+          <h1 className="login-hero-line3">NOTA</h1>
+          <p className="login-hero-sub">Tu música, tu momento</p>
+        </div>
+
+        {/* Equalizer animado */}
+        <div className="login-equalizer-area">
+          <div className="login-equalizer">
+            {[...Array(14)].map((_, i) => (
+              <div
+                key={i}
+                className="login-eq-bar"
+                style={{
+                  animationDelay: `${i * 0.13}s`,
+                  animationDuration: `${1 + Math.random() * 0.6}s`,
+                }}
+              />
+            ))}
+          </div>
+          <span className="login-copyright">© 2026 VIBE</span>
+        </div>
+      </aside>
+
+      {/* ── Panel Derecho: Formulario ── */}
+      <main className="login-main">
+        <div className="login-form-container">
+          {/* Tabs con underline deslizante */}
+          <div className="login-tabs">
+            <button
+              type="button"
+              className={`login-tab ${!isSignUp ? 'login-tab--active' : ''}`}
+              onClick={() => switchTab(false)}
+              disabled={isDisabled}
+            >
+              INICIAR SESIÓN
+            </button>
+            <button
+              type="button"
+              className={`login-tab ${isSignUp ? 'login-tab--active' : ''}`}
+              onClick={() => switchTab(true)}
+              disabled={isDisabled}
+            >
+              CREAR CUENTA
+            </button>
+            {/* Underline slider */}
+            <div
+              className="login-tab-slider"
+              style={{ transform: isSignUp ? 'translateX(100%)' : 'translateX(0)' }}
+            />
+          </div>
+
+          {/* Header */}
+          <div className="login-form-header">
+            <h2 className="login-form-title">
+              {isSignUp ? 'Únete a Vibe' : 'Bienvenido'}
+            </h2>
+            <p className="login-form-subtitle">
+              {isSignUp ? 'Crea tu cuenta gratis' : 'Ingresa tus datos para continuar'}
+            </p>
+          </div>
+
+          {/* Formulario */}
+          <form onSubmit={handleSubmit} className="login-form">
+            <div className="login-field">
+              <label htmlFor="login-email" className="login-label">EMAIL</label>
+              <input
+                id="login-email"
                 type="email"
                 placeholder="tu@email.com"
                 value={email}
-                onChange={(e) => {
-                  setEmail(e.target.value);
-                  setError(null);
-                }}
+                onChange={(e) => { setEmail(e.target.value); setError(null); }}
                 required
-                disabled={isSubmitting || isSocialLoading}
-                className="bg-zinc-900 border-zinc-700 text-white placeholder:text-zinc-500"
+                disabled={isDisabled}
+                className="login-input"
               />
             </div>
 
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-zinc-300 mb-2">
-                Contraseña
-              </label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  setError(null);
-                }}
-                required
-                disabled={isSubmitting || isSocialLoading}
-                className="bg-zinc-900 border-zinc-700 text-white placeholder:text-zinc-500"
-              />
+            <div className="login-field">
+              <label htmlFor="login-password" className="login-label">CONTRASEÑA</label>
+              <div className="login-input-wrapper">
+                <input
+                  id="login-password"
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => { setPassword(e.target.value); setError(null); }}
+                  required
+                  disabled={isDisabled}
+                  className="login-input login-input--has-icon"
+                />
+                <button
+                  type="button"
+                  className="login-eye-btn"
+                  onClick={() => setShowPassword(!showPassword)}
+                  tabIndex={-1}
+                  aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
 
             {isSignUp && (
-              <div>
-                <label htmlFor="confirmPassword" className="block text-sm font-medium text-zinc-300 mb-2">
-                  Confirmar contraseña
-                </label>
-                <Input
-                  id="confirmPassword"
-                  type="password"
-                  placeholder="••••••••"
-                  required
-                  disabled={isSubmitting || isSocialLoading}
-                  className="bg-zinc-900 border-zinc-700 text-white placeholder:text-zinc-500"
-                />
-              </div>
-            )}
-
-            {error && (
-              <div className="text-red-500 text-sm text-center bg-red-900/20 border border-red-500/30 rounded-md p-2">
-                {error}
-              </div>
-            )}
-            {resetMessage && (
-              <div className="text-green-500 text-sm text-center bg-green-900/20 border border-green-500/30 rounded-md p-2">
-                {resetMessage}
+              <div className="login-field login-field--animate-in">
+                <label htmlFor="login-confirm-password" className="login-label">CONFIRMAR CONTRASEÑA</label>
+                <div className="login-input-wrapper">
+                  <input
+                    id="login-confirm-password"
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    placeholder="••••••••"
+                    value={confirmPassword}
+                    onChange={(e) => { setConfirmPassword(e.target.value); setError(null); }}
+                    required
+                    disabled={isDisabled}
+                    className="login-input login-input--has-icon"
+                  />
+                  <button
+                    type="button"
+                    className="login-eye-btn"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    tabIndex={-1}
+                    aria-label={showConfirmPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                  >
+                    {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
               </div>
             )}
 
             {!isSignUp && (
-              <div className="text-right">
+              <div className="login-forgot-row">
                 <button
                   type="button"
                   onClick={handleForgotPassword}
-                  disabled={isSubmitting || isSocialLoading}
-                  className="text-xs text-violet-400 hover:text-white transition-colors disabled:opacity-50 mt-1"
+                  disabled={isDisabled}
+                  className="login-forgot-link"
                 >
                   ¿Olvidaste tu contraseña?
                 </button>
               </div>
             )}
-            
-            <Button
+
+            {error && (
+              <div className="login-error">{error}</div>
+            )}
+            {resetMessage && (
+              <div className="login-success">{resetMessage}</div>
+            )}
+
+            <button
               type="submit"
-              disabled={isSubmitting || isSocialLoading}
-              className="w-full bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-600 hover:to-fuchsia-600 text-white font-semibold py-6 rounded-full transition-all disabled:opacity-50"
+              disabled={isDisabled}
+              className="login-submit-btn"
             >
               {isSubmitting ? (
-                <span className="flex items-center gap-2">
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Cargando...
+                <span className="login-btn-loading">
+                  <div className="login-custom-loader">
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  Autenticando...
                 </span>
               ) : (
-                isSignUp ? 'Crear cuenta' : 'Iniciar sesión'
+                isSignUp ? 'CREAR CUENTA' : 'ENTRAR'
               )}
-            </Button>
+            </button>
           </form>
 
           {/* Divider */}
-          <div className="relative my-6">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-zinc-800"></div>
-            </div>
-            <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-black text-zinc-500">o continúa con</span>
-            </div>
+          <div className="login-divider">
+            <div className="login-divider-line" />
+            <span className="login-divider-text">O CONTINÚA CON</span>
+            <div className="login-divider-line" />
           </div>
 
-          {/* Social Login */}
-          <div className="space-y-3">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isSubmitting || isSocialLoading}
-              className="w-full bg-zinc-900 border-zinc-700 text-white hover:bg-zinc-800 py-6 rounded-full disabled:opacity-50"
-              onClick={handleSocialLogin}
-            >
-              {isSocialLoading ? (
-                <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-              ) : (
-                <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24">
-                  <path
-                    fill="currentColor"
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  />
-                  <path
-                    fill="currentColor"
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                  />
-                  <path
-                    fill="currentColor"
-                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-                  />
-                  <path
-                    fill="currentColor"
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-                  />
-                </svg>
-              )}
-              Google
-            </Button>
-          </div>
+          {/* Google — outline secondary */}
+          <button
+            type="button"
+            disabled={isDisabled}
+            className="login-google-btn"
+            onClick={handleSocialLogin}
+          >
+            {isSocialLoading ? (
+              <div className="login-custom-loader" style={{ filter: 'invert(1) hue-rotate(180deg)' }}>
+                <span />
+                <span />
+                <span />
+                <span />
+              </div>
+            ) : (
+              <svg className="login-google-icon" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+              </svg>
+            )}
+            GOOGLE
+          </button>
 
-          {/* Toggle Sign Up */}
-          <div className="mt-6 text-center">
-            <button
-              type="button"
-              onClick={() => setIsSignUp(!isSignUp)}
-              disabled={isSubmitting || isSocialLoading}
-              className="text-sm text-zinc-400 hover:text-white transition-colors disabled:opacity-50"
-            >
-              {isSignUp ? (
-                <>
-                  ¿Ya tienes cuenta?{' '}
-                  <span className="text-violet-400 font-medium">Inicia sesión</span>
-                </>
-              ) : (
-                <>
-                  ¿No tienes cuenta?{' '}
-                  <span className="text-violet-400 font-medium">Regístrate</span>
-                </>
-              )}
-            </button>
-          </div>
+          {/* Footer legal */}
+          <p className="login-legal">
+            Al continuar, aceptas los{' '}
+            <a href="#" className="login-legal-link">Términos de Servicio</a>
+            {' '}y{' '}
+            <a href="#" className="login-legal-link">Política de Privacidad</a>
+            {' '}de Vibe
+          </p>
         </div>
 
-        {/* Footer */}
-        <p className="text-center text-zinc-500 text-xs mt-8">
-          Al continuar, aceptas los Términos de Servicio y la Política de Privacidad de Vibe
-        </p>
-      </div>
+        {/* Notas musicales dispersas — esquina inferior derecha */}
+        <div className="login-bg-notes" aria-hidden="true">
+          <span className="login-bg-note login-bg-note--1">♪</span>
+          <span className="login-bg-note login-bg-note--2">♫</span>
+          <span className="login-bg-note login-bg-note--3">♩</span>
+          <span className="login-bg-note login-bg-note--4">♬</span>
+        </div>
+      </main>
     </div>
   );
 }

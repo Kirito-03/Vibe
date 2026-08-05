@@ -38,6 +38,7 @@ export const AppShell = ({ user, onLogout, onProfileUpdate }: AppShellProps) => 
 
   const [resumeCandidate, setResumeCandidate] = useState<any | null>(null);
   const [showContinueListening, setShowContinueListening] = useState(false);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('');
 
   useEffect(() => {
     if (!user?.uid) {
@@ -145,6 +146,10 @@ export const AppShell = ({ user, onLogout, onProfileUpdate }: AppShellProps) => 
   };
 
   const handleGoBack = () => {
+    if (currentView === 'playlist') {
+      handleNavigate('library');
+      return;
+    }
     if (historyIndex > 0) {
       const newIdx = historyIndex - 1;
       setHistoryIndex(newIdx);
@@ -177,6 +182,8 @@ export const AppShell = ({ user, onLogout, onProfileUpdate }: AppShellProps) => 
             currentSong={currentSong}
             isPlaying={isPlaying}
             onSongPlay={(song) => onSongPlay(song)}
+            searchQuery={globalSearchQuery}
+            onSearchQueryChange={setGlobalSearchQuery}
           />
         );
       case 'library':
@@ -187,6 +194,7 @@ export const AppShell = ({ user, onLogout, onProfileUpdate }: AppShellProps) => 
             onPlaylistClick={handlePlaylistClick}
             onSongPlay={(song, playlist) => onSongPlay(song, playlist)}
             tabOverride={libraryTab}
+            onCreatePlaylist={() => setShowCreatePlaylist(true)}
           />
         );
       case 'profile':
@@ -195,7 +203,7 @@ export const AppShell = ({ user, onLogout, onProfileUpdate }: AppShellProps) => 
         return selectedPlaylist ? (
           <PlaylistDetail
             playlist={selectedPlaylist}
-            onBack={handleGoBack}
+            onBack={() => handleNavigate('library')}
           />
         ) : null;
       default:
@@ -216,7 +224,7 @@ export const AppShell = ({ user, onLogout, onProfileUpdate }: AppShellProps) => 
   };
 
   return (
-    <div className="h-screen flex flex-col bg-black text-white overflow-hidden">
+    <div className="h-screen flex flex-col bg-[#080010] text-white overflow-hidden">
       <div className="flex-1 flex overflow-hidden">
         <Sidebar
           user={user}
@@ -226,19 +234,26 @@ export const AppShell = ({ user, onLogout, onProfileUpdate }: AppShellProps) => 
           onPlaylistClick={handlePlaylistClick}
           onOpenFavorites={handleOpenFavorites}
         />
-        <main className="flex-1 flex flex-col overflow-auto chameleon-bg hide-scrollbar" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
-          <div className="hidden md:block">
-            <Header
-              user={user}
-              onNavigate={handleNavigate}
-              onGoBack={handleGoBack}
-              onGoForward={handleGoForward}
-              canGoBack={historyIndex > 0}
-              canGoForward={historyIndex < viewHistory.length - 1}
-            />
+        <main className="flex-1 relative flex flex-col overflow-hidden bg-[#080010]">
+          <div className="hidden md:block absolute top-0 left-0 right-0 z-40 pointer-events-none">
+            <div className="pointer-events-auto">
+              <Header
+                user={user}
+                onNavigate={handleNavigate}
+                onGoBack={handleGoBack}
+                onGoForward={handleGoForward}
+                canGoBack={currentView === 'playlist' || historyIndex > 0}
+                canGoForward={historyIndex < viewHistory.length - 1}
+                currentView={currentView}
+                isPlaying={isPlaying}
+                onSongPlay={onSongPlay}
+                searchQuery={globalSearchQuery}
+                onSearchQueryChange={setGlobalSearchQuery}
+              />
+            </div>
           </div>
           <div
-            className={`flex-1 overflow-auto pt-14 md:pt-0 animate-in fade-in slide-in-from-bottom-2 duration-500 ease-out ${(isNowPlayingOpen || isNowPlayingTransitioning) ? '' : 'pb-[calc(7rem+env(safe-area-inset-bottom,0px))] md:pb-0'}`}
+            className={`flex-1 overflow-auto animate-in fade-in slide-in-from-bottom-2 duration-500 ease-out ${(isNowPlayingOpen || isNowPlayingTransitioning) ? '' : 'pb-[calc(7rem+env(safe-area-inset-bottom,0px))] md:pb-0'}`}
             key={currentView + (selectedPlaylist?.id || '')}
           >
             {renderContent()}

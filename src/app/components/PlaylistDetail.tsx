@@ -99,15 +99,7 @@ export function PlaylistDetail({
       <div
         className="relative pt-16 md:pt-0 bg-gradient-to-b from-zinc-700 to-zinc-900"
       >
-        {/* Back button (always visible, outside sticky) */}
-        <button
-          onClick={onBack}
-          className="absolute top-4 left-4 text-white hover:scale-110 transition-transform z-10 bg-black/30 rounded-full p-1.5"
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </button>
-
-        <div className="flex flex-col md:flex-row items-center md:items-end gap-4 md:gap-6 px-4 md:px-8 pt-10 md:pt-16 pb-6">
+        <div className="flex flex-col md:flex-row items-center md:items-end gap-4 md:gap-6 px-4 md:px-8 pt-20 md:pt-28 pb-6">
           {/* Cover image */}
           <div className="w-40 h-40 md:w-52 md:h-52 flex-shrink-0 shadow-2xl rounded-md overflow-hidden bg-zinc-800">
             {playlist.image_url ? (

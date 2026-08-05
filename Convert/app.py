@@ -376,7 +376,7 @@ def _do_download(url: str, mode: str, quality: str) -> DownloadResponse:
         last_err: Optional[str] = None
         info: dict = {}
 
-        client_attempts = ["web"] if cookies_tmp else ["android,web,ios", "android", "web", "ios"]
+        client_attempts = ["android,web,ios", "android", "web", "ios"]
         for client_arg in client_attempts:
             base_args = _yt_dlp_base_args(cookies_tmp, player_client=client_arg)
             base_cmd = [

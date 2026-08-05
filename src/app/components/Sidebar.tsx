@@ -21,10 +21,10 @@ export function Sidebar({ user, currentView, onNavigate, onCreatePlaylist, onPla
   const menuContent = (
     <>
       <div className="p-6 pb-4">
-        <div className="flex items-center gap-2">
-          <img src="/ico.png" alt="Logo" className="w-8 h-8 object-contain" />
-          <h1 className="text-xl font-bold bg-gradient-to-r from-violet-400 to-fuchsia-400 bg-clip-text text-transparent">
-            ibe no Sekai
+        <div className="flex items-center gap-3">
+          <img src="/ico.png" alt="Logo" className="w-6 h-6 object-contain" />
+          <h1 className="text-xl font-bold text-white tracking-[4px]">
+            VIBE
           </h1>
         </div>
       </div>
@@ -43,10 +43,10 @@ export function Sidebar({ user, currentView, onNavigate, onCreatePlaylist, onPla
                   onNavigate(item.view);
                   setIsMobileMenuOpen(false);
                 }}
-                className={`flex items-center gap-4 px-4 py-2.5 w-full rounded-xl transition-all duration-200 ${
+                className={`flex items-center gap-4 px-4 py-2 w-full transition-all duration-200 border-l-2 ${
                   currentView === item.view
-                    ? 'bg-violet-500/15 text-violet-300 shadow-sm shadow-violet-500/10'
-                    : 'text-zinc-400 hover:bg-white/5 hover:text-white'
+                    ? 'border-[#a855f7] bg-[#2a0040]/30 text-white font-semibold'
+                    : 'border-transparent text-zinc-400 hover:text-white'
                 }`}
               >
                 <item.icon className="w-5 h-5" />
@@ -56,47 +56,41 @@ export function Sidebar({ user, currentView, onNavigate, onCreatePlaylist, onPla
           ))}
         </ul>
 
-        <div className="mt-6 space-y-1">
+        <div className="mt-8 space-y-1">
           <button 
             onClick={() => {
               onCreatePlaylist();
               setIsMobileMenuOpen(false);
             }}
-            className="flex items-center gap-4 px-4 py-2.5 w-full rounded-xl transition-all text-zinc-400 hover:bg-white/5 hover:text-white"
+            className="flex items-center gap-4 px-4 py-2 w-full transition-all text-zinc-400 hover:text-white"
           >
-            <Plus className="w-5 h-5" />
+            <div className="w-5 h-5 flex items-center justify-center rounded-sm text-zinc-400">
+              <Plus className="w-4 h-4" />
+            </div>
             <span className="text-sm font-medium">Crear playlist</span>
-          </button>
-          <button
-            onClick={() => {
-              onOpenFavorites();
-              setIsMobileMenuOpen(false);
-            }}
-            className="flex items-center gap-4 px-4 py-2.5 w-full rounded-xl transition-all text-zinc-400 hover:bg-white/5 hover:text-white"
-          >
-            <Heart className="w-5 h-5 fill-fuchsia-500 text-fuchsia-500" />
-            <span className="text-sm font-medium">Tus favoritos</span>
           </button>
         </div>
 
-        {playlists.length > 0 && (
-          <div className="mt-6 px-2 hidden md:block">
-            <div className="border-t border-white/5 pt-4">
-              <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-3 px-2">Playlists</p>
-              <ul className="space-y-1">
-                {playlists.map((playlist) => (
-                  <li
-                    key={playlist.id}
-                    onClick={() => { onPlaylistClick(playlist); setIsMobileMenuOpen(false); }}
-                    className="text-sm text-zinc-400 hover:text-white cursor-pointer transition-colors truncate px-2 py-1.5 rounded-lg hover:bg-white/5"
-                  >
-                    {playlist.name}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
+        <div className="mt-8 px-4 hidden md:block">
+          <p className="text-[11px] font-bold tracking-[2px] text-zinc-500 mb-4">PLAYLISTS</p>
+          <ul className="space-y-3">
+            <li
+              onClick={() => { onOpenFavorites(); setIsMobileMenuOpen(false); }}
+              className="text-sm text-zinc-400 hover:text-white cursor-pointer transition-colors truncate"
+            >
+              Favoritos
+            </li>
+            {playlists.map((playlist) => (
+              <li
+                key={playlist.id}
+                onClick={() => { onPlaylistClick(playlist); setIsMobileMenuOpen(false); }}
+                className="text-sm text-zinc-400 hover:text-white cursor-pointer transition-colors truncate"
+              >
+                {playlist.name}
+              </li>
+            ))}
+          </ul>
+        </div>
       </nav>
     </>
   );
@@ -139,7 +133,7 @@ export function Sidebar({ user, currentView, onNavigate, onCreatePlaylist, onPla
       </div>
 
       {/* Desktop Sidebar */}
-      <div className="hidden md:flex w-60 bg-zinc-950/80 backdrop-blur-md text-white flex-col h-full border-r border-white/5">
+      <div className="hidden md:flex w-60 bg-[#170020] text-white flex-col h-full border-r border-[#2a0040]">
         {menuContent}
       </div>
 

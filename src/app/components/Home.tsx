@@ -66,6 +66,7 @@ export function Home({
   const discoverSource = home.recommendationsSource;
   const [refreshNonce, setRefreshNonce] = useState<number>(0);
   const lastSeenMarkRef = useRef<string>('');
+  const [activePill, setActivePill] = useState('Todo');
 
   useEffect(() => {
     if (!user) {
@@ -193,10 +194,10 @@ export function Home({
         home.setRecentTracks(songs.slice(0, 12)); // Limit to 12 for UI display
 
         // -- Personalizar sugerencias basadas en el historial
-        let seedForYou = 'top hits 2026';
-        let seedRecs = 'tendencias musicales 2026';
+        let seedForYou = activePill !== 'Todo' ? `${activePill} music official` : 'top hits 2026';
+        let seedRecs = activePill !== 'Todo' ? `${activePill} trending` : 'tendencias musicales 2026';
         
-        if (songs.length > 0) {
+        if (activePill === 'Todo' && songs.length > 0) {
           const artists = songs.map(s => s.artist).filter(a => a && a !== 'Internet' && a !== 'Desconocido' && a !== 'YouTube');
           const cleanTitles = songs.map(s => s.title.split('-')[0].split('(')[0].trim());
           
@@ -366,7 +367,10 @@ export function Home({
           
       })
       .catch(() => home.setRecentTracks([]));
-  }, [user, retryTick, refreshNonce]);
+  }, [user, retryTick, refreshNonce, activePill]);
+
+  const lastPlayed = history.length > 0 ? history[0] : null;
+  const shouldShowContinueListening = lastPlayed && !currentSong;
 
   useEffect(() => {
     if (!user) return;
@@ -481,432 +485,139 @@ export function Home({
   };
 
   return (
-    <div className="flex-1 overflow-auto bg-gradient-to-b from-zinc-900/50 to-black hide-scrollbar" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
-      <div className="p-4 md:p-8 pb-28 md:pb-8">
-        <HomeHeader />
+    <div className="flex-1 overflow-auto bg-[#080010] hide-scrollbar" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+      <div className="p-6 md:p-8 pb-28 md:pb-12 pt-14 md:pt-[72px]">
+        <div className="flex items-center justify-between mb-8">
+          <h2 className="text-3xl font-extrabold text-white">Buenas tardes <span className="text-sm font-normal text-zinc-400 ml-2"></span></h2>
+          <div className="flex gap-2 overflow-x-auto hide-scrollbar">
+            {['Todo', 'Chill', 'Workout', 'Fiesta', 'Romántico', 'Focus', 'Rap', 'Pop'].map((pill) => (
+              <button 
+                key={pill} 
+                onClick={() => setActivePill(pill)}
+                className={`px-4 py-1.5 rounded-sm text-sm font-medium whitespace-nowrap transition-colors ${activePill === pill ? 'bg-white text-black' : 'bg-white/5 text-zinc-300 hover:bg-white/10'}`}
+              >
+                {pill}
+              </button>
+            ))}
+          </div>
+        </div>
 
-        {/* ── Última canción reproducida ── */}
-        {Boolean(showContinueListening) && resumeCandidate && !isPlaying && (
-          <section className="mb-8">
-            {(() => {
-              const lastSong = downloadToSong(resumeCandidate) as any;
-              const isLastActive = currentSong?.id === lastSong.id;
-              const showPause = isLastActive && isPlaying;
+        {/* SEGUIR ESCUCHANDO */}
+        {shouldShowContinueListening && lastPlayed && (
+          <section className="mb-10">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[13px] font-bold tracking-[2px] text-zinc-300 uppercase border-l-2 border-[#a855f7] pl-3">Seguir escuchando</h3>
+              <div className="flex items-center gap-2">
+              </div>
+            </div>
+            <div 
+              onClick={() => onSongPlay(lastPlayed as any)}
+              className="flex items-center justify-between bg-white/5 hover:bg-white/10 transition-colors rounded-md p-3 cursor-pointer group"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 flex-shrink-0 relative">
+                  <img src={lastPlayed.image_url || lastPlayed.imageUrl} alt={lastPlayed.title} className="w-full h-full object-cover rounded" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-white font-bold text-sm truncate">{lastPlayed.title}</p>
+                  <p className="text-xs text-zinc-400 truncate">{lastPlayed.artist}</p>
+                </div>
+              </div>
+              <div className="text-xs text-[#a855f7] font-medium pr-4">
+                {lastPlayed.duration_seconds ? `${Math.floor(lastPlayed.duration_seconds/60)}:${String(lastPlayed.duration_seconds%60).padStart(2,'0')}` : ''}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* Escuchado Recientemente */}
+        {history.length > 1 && (
+          <section className="mb-10">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[13px] font-bold tracking-[2px] text-zinc-300 uppercase border-l-2 border-[#a855f7] pl-3">Escuchado recientemente</h3>
+              <div className="flex items-center gap-2">
+                <button className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronLeft className="w-5 h-5" /></button>
+                <button className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronRight className="w-5 h-5" /></button>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+              {history.slice(1, 7).map((song) => (
+                <div key={song.id} onClick={() => onSongPlay(song as any)} className="bg-transparent cursor-pointer group">
+                  <div className="relative aspect-square mb-3 overflow-hidden shadow-lg">
+                    <img src={song.image_url || song.imageUrl} alt={song.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                       <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center"><Play className="w-5 h-5 text-white ml-1" fill="currentColor"/></div>
+                    </div>
+                  </div>
+                  <h4 className="text-white font-bold text-sm truncate">{song.title}</h4>
+                  <p className="text-zinc-400 text-xs truncate">{song.artist}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* PARA TI */}
+        <section className="mb-10">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-[13px] font-bold tracking-[2px] text-zinc-300 uppercase border-l-2 border-[#a855f7] pl-3">Para ti</h3>
+            <div className="flex items-center gap-2">
+              <button className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronLeft className="w-5 h-5" /></button>
+              <button className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronRight className="w-5 h-5" /></button>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+            {randomPicks.slice(0, 4).map((d: any) => {
+              const song = {
+                id: d.id, title: d.title, artist: d.artist || 'Internet',
+                imageUrl: d.thumbnail_url || '', source: 'youtube', youtube_id: d.youtube_id || d.id
+              } as Song;
               return (
-            <div
-              onClick={() => {
-                if (import.meta.env.DEV) console.debug('[track-click] resumeCandidate', lastSong);
-                onSongPlay(lastSong);
-                onDismissContinueListening?.();
-              }}
-              className="flex items-center gap-4 p-3.5 rounded-2xl bg-gradient-to-r from-violet-500/10 to-fuchsia-500/10 border border-violet-500/10 cursor-pointer hover:border-violet-500/20 transition-all group"
-            >
-              <div className="w-14 h-14 rounded-xl overflow-hidden flex-shrink-0 shadow-lg shadow-violet-500/10">
-                <TrackCover
-                  src={(resumeCandidate as any).thumbnail_url}
-                  videoId={(resumeCandidate as any).youtube_id || (resumeCandidate as any).id || null}
-                  title={(resumeCandidate as any).title || ''}
-                  className="w-full h-full object-cover"
-                />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-[11px] uppercase tracking-widest text-violet-400/70 font-medium mb-1">Continuar escuchando</p>
-                <p className="text-white font-semibold truncate">{(resumeCandidate as any).title}</p>
-                <p className="text-zinc-400 text-sm truncate">{(resumeCandidate as any).artist ?? 'YouTube'}</p>
-              </div>
-              <div className="w-10 h-10 bg-violet-500 rounded-full flex items-center justify-center shadow-lg shadow-violet-500/30 group-hover:scale-105 transition-transform">
-                {showPause
-                  ? <Pause className="w-4 h-4 text-white" fill="currentColor" />
-                  : <Play className="w-4 h-4 text-white ml-0.5" fill="currentColor" />
-                }
-              </div>
-            </div>
+                <div key={d.id} onClick={() => handleResultClick(d, song, false)} className="cursor-pointer group">
+                  <div className="aspect-square relative overflow-hidden shadow-lg">
+                    <img src={song.imageUrl} alt={song.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                        <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center"><Play className="w-5 h-5 text-white ml-1" fill="currentColor"/></div>
+                    </div>
+                  </div>
+                  <h4 className="text-white font-bold text-sm truncate mt-3">{song.title}</h4>
+                  <p className="text-zinc-400 text-xs truncate">{song.artist}</p>
+                </div>
               );
-            })()}
-          </section>
-        )}
-
-        {/* ── Tu música removida (ahora usamos recomendaciones personalizadas) ── */}
-
-        {/* ── Escuchado recientemente ── */}
-        {history.length > 0 && (
-          <section className="mb-8 md:mb-12">
-            <h3 className="text-xl md:text-2xl font-bold text-white mb-4 md:mb-6 flex items-center gap-2">
-              <Clock className="w-5 h-5 text-violet-400/70" />
-              Escuchado recientemente
-            </h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-              {history.map((song, index) => {
-                const isActive = currentSong?.id === song.id;
-                return (
-                  <div
-                    key={`h-${song.id}-${index}`}
-                    onClick={() => {
-                      if (import.meta.env.DEV) console.debug('[track-click] recent', song);
-                      onSongPlay(song as any);
-                      onDismissContinueListening?.();
-                    }}
-                    className={`flex items-center h-14 rounded-md overflow-hidden cursor-pointer transition-all group shadow-md
-                      ${isActive ? 'bg-violet-500/20 text-violet-300' : 'bg-white/5 hover:bg-white/10 text-white'}`}
-                  >
-                    <div className="relative w-14 h-14 flex-shrink-0 bg-zinc-800 shadow-lg">
-                      <TrackCover
-                        src={song.image_url || song.imageUrl}
-                        videoId={song.youtube_id || null}
-                        title={song.title}
-                        className="w-full h-full object-cover"
-                      />
-                      <div className={`absolute inset-0 flex items-center justify-center bg-black/50 transition-opacity
-                        ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-                        {isActive && isPlaying
-                          ? <Pause className="w-5 h-5 text-white" fill="currentColor" />
-                          : <Play className="w-5 h-5 text-white ml-0.5" fill="currentColor" />
-                        }
-                      </div>
-                    </div>
-                    <div className="flex-1 min-w-0 px-3 py-1">
-                      <p className="text-sm font-bold truncate">
-                        {song.title}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
-        {/* ── Música Aleatoria de la Base de Datos ── */}
-        <section className="mb-8 md:mb-12">
-          
-          <div className="flex items-center justify-between mb-4 md:mb-6">
-            <div>
-              <h3 className="text-xl md:text-2xl font-bold text-white flex items-center gap-2">
-                Música para ti
-                {import.meta.env.DEV && forYouSource && (
-                  <span className="ml-2 text-[10px] font-medium text-white/40">
-                    source: {forYouSource}
-                  </span>
-                )}
-              </h3>
-              {history.length > 0 && (
-                <p className="text-xs text-white/50 mt-1">
-                  Basado en lo que escuchas recientemente
-                </p>
-              )}
-            </div>
-            <div className="hidden md:flex gap-2">
-
-              <button
-                onClick={() => refreshRecommendations()}
-                className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white transition-colors"
-                aria-label="Actualizar recomendaciones"
-              >
-                <RotateCw className="w-5 h-5" />
-              </button>
-              <button onClick={() => scrollCarousel(forYouRef, 'left')} className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white transition-colors">
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-              <button onClick={() => scrollCarousel(forYouRef, 'right')} className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white transition-colors">
-                <ChevronRight className="w-5 h-5" />
-              </button>
-            </div>
+            })}
           </div>
-
-          {forYouError && (
-            <div className="mb-5">
-              <LoadErrorState
-                message={forYouError.startsWith('HTTP 503') ? 'Intenta nuevamente en unos segundos' : 'Intenta nuevamente en unos segundos'}
-                isLoading={isLoadingForYou}
-                onRetry={() => {
-                  home.setForYouError(null);
-                  setRetryTick((t) => t + 1);
-                }}
-              />
-            </div>
-          )}
-
-          {!forYouError && isLoadingForYou && randomPicks.length === 0 && (
-            <div className="mb-5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300 flex items-center gap-2">
-              <Loader2 className="w-4 h-4 text-violet-300 animate-spin" />
-              Cargando...
-            </div>
-          )}
-
-          {!forYouError && !isLoadingForYou && randomPicks.length === 0 && (
-            <div className="mb-5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4">
-              <p className="text-sm font-semibold text-white">Aún no hay canciones para mostrar</p>
-              <p className="mt-1 text-xs text-white/60">Busca o reproduce algunas canciones para personalizar esta sección.</p>
-              <button
-                onClick={() => onExplore?.()}
-                className="mt-3 inline-flex items-center justify-center rounded-full bg-violet-500/20 px-4 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/30 transition-colors"
-              >
-                Explorar música
-              </button>
-            </div>
-          )}
-          
-          {randomPicks.length > 0 && (
-            <div 
-              ref={forYouRef}
-              className="flex overflow-x-auto gap-4 pb-6 pt-2 -mx-6 px-6 snap-x snap-mandatory hide-scrollbar scroll-smooth" 
-              style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
-              onScroll={(e) => handleScroll(e, 'foryou')}
-            >
-              {randomPicks.map((d: any) => {
-                const isLocal = d.source === 'local' || !d.source;
-                const song = {
-                  id: d.id,
-                  title: d.title,
-                  artist: d.artist || 'Desconocido',
-                  artist_name: d.artist || 'Desconocido',
-                  file_url: (isLocal && d.id)
-                    ? `${API_BASE}/api/downloads/stream/${d.id}`
-                    : (d.youtube_id
-                        ? `https://www.youtube.com/watch?v=${d.youtube_id}`
-                        : d.url || ''),
-                  imageUrl: d.thumbnail_url || d.image_url || '',
-                  image_url: d.thumbnail_url || d.image_url || '',
-                  duration: d.duration_seconds || 0,
-                  duration_seconds: d.duration_seconds || 0,
-                  source: isLocal ? 'local' : 'youtube',
-                  youtube_id: d.youtube_id || d.id
-                } as Song;
-                
-                const isActive = currentSong?.id === song.id;
-                const songKey = String(song.youtube_id || song.id);
-                const isDownloading = preparingTrackKey === songKey;
-
-                return (
-                  <div
-                    key={`rand-${d.id}`}
-                    className="min-w-[140px] max-w-[160px] md:min-w-[180px] md:max-w-[200px] flex-shrink-0 snap-start bg-white/[0.02] p-4 rounded-2xl hover:bg-white/[0.06] transition-all group cursor-pointer border border-transparent hover:border-white/10 relative"
-                    onClick={() => handleResultClick(d, song, isLocal)}
-                  >
-                    <div className="absolute top-2 left-2 z-10">
-                      <TrackFeedbackMenu
-                        track={{
-                          id: song.id,
-                          youtube_id: song.youtube_id,
-                          title: song.title,
-                          artist: song.artist,
-                          uploader: song.artist,
-                          source: song.source,
-                        }}
-                        onApplied={(type) => {
-                          if (type === 'not_this_track') {
-                            const myId = String(d.youtube_id || d.id || '');
-                            home.setForYouItems((prev) => prev.filter((x: any) => String(x.youtube_id || x.id || '') !== myId));
-                          } else if (type === 'not_this_artist') {
-                            const myArtist = String(song.artist || '').trim();
-                            home.setForYouItems((prev) =>
-                              prev.filter((x: any) => String(x.artist || x.uploader || '').trim() !== myArtist)
-                            );
-                          } else {
-                            refreshRecommendations();
-                          }
-                        }}
-                      />
-                    </div>
-                    {(!isLocal && isDownloading) && (
-                      <div className="absolute top-2 right-2 z-10 bg-black/60 rounded-full p-1.5 backdrop-blur-sm shadow-md" title="Descargando...">
-                        <Loader2 className="w-3.5 h-3.5 text-violet-400 animate-spin" />
-                      </div>
-                    )}
-                    <div className="relative aspect-square mb-4 rounded-xl overflow-hidden bg-zinc-800/50 shadow-lg">
-                      <TrackCover
-                        src={song.imageUrl}
-                        videoId={!isLocal ? String(song.youtube_id || song.id || '') : null}
-                        title={song.title}
-                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                      />
-                      
-                      <div className={`absolute bottom-3 right-3 w-12 h-12 bg-violet-500 rounded-full flex items-center justify-center shadow-xl transform transition-all duration-300 ${isActive ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 group-hover:opacity-100 group-hover:translate-y-0'}`}>
-                        {isActive && isPlaying ? (
-                          <Pause className="w-6 h-6 text-white" fill="currentColor" />
-                        ) : (
-                          <Play className="w-6 h-6 text-white ml-1" fill="currentColor" />
-                        )}
-                      </div>
-                    </div>
-                    <h4 className={`font-bold text-base truncate mb-1 ${isActive ? 'text-violet-400' : 'text-white'}`}>
-                      {song.title}
-                    </h4>
-                    <p className="text-sm text-zinc-400 truncate">
-                      {song.artist}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-        {/* ── Descubre Nueva Música (YouTube) ── */}
-        <section className="mb-8 md:mb-12">
-          <div className="flex items-center justify-between mb-4 md:mb-6">
-            <h3 className="text-xl md:text-2xl font-bold text-white">
-              Descubre nueva música
-              {import.meta.env.DEV && discoverSource && (
-                <span className="ml-2 text-[10px] font-medium text-white/40">
-                  source: {discoverSource}
-                </span>
-              )}
-            </h3>
-            <div className="hidden md:flex gap-2">
-              <button
-                onClick={() => refreshRecommendations()}
-                className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white transition-colors"
-                aria-label="Actualizar recomendaciones"
-              >
-                <RotateCw className="w-5 h-5" />
-              </button>
-              <button onClick={() => scrollCarousel(recommendationsRef, 'left')} className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white transition-colors">
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-              <button onClick={() => scrollCarousel(recommendationsRef, 'right')} className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-white transition-colors">
-                <ChevronRight className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
-
-          {recommendationsError && (
-            <div className="mb-5">
-              <LoadErrorState
-                message={recommendationsError.startsWith('HTTP 503') ? 'Intenta nuevamente en unos segundos' : 'Intenta nuevamente en unos segundos'}
-                isLoading={isLoadingRecommendations}
-                onRetry={() => {
-                  home.setRecommendationsError(null);
-                  setRetryTick((t) => t + 1);
-                }}
-              />
-            </div>
-          )}
-
-          {!recommendationsError && isLoadingRecommendations && recommendations.length === 0 && (
-            <div className="mb-5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300 flex items-center gap-2">
-              <Loader2 className="w-4 h-4 text-violet-300 animate-spin" />
-              Cargando...
-            </div>
-          )}
-
-          {!recommendationsError && !isLoadingRecommendations && recommendations.length === 0 && (
-            <div className="mb-5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4">
-              <p className="text-sm font-semibold text-white">Aún no hay canciones para mostrar</p>
-              <p className="mt-1 text-xs text-white/60">Busca o reproduce algunas canciones para personalizar esta sección.</p>
-              <button
-                onClick={() => onExplore?.()}
-                className="mt-3 inline-flex items-center justify-center rounded-full bg-violet-500/20 px-4 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/30 transition-colors"
-              >
-                Explorar música
-              </button>
-            </div>
-          )}
-          
-          {recommendations.length > 0 && (
-            <div 
-              ref={recommendationsRef}
-              className="flex overflow-x-auto gap-4 pb-6 pt-2 -mx-6 px-6 snap-x snap-mandatory hide-scrollbar scroll-smooth" 
-              style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
-              onScroll={(e) => handleScroll(e, 'recommendations')}
-            >
-              {recommendations.slice(0, 30).map((d: any) => {
-                const rawArtist = d.artist || d.uploader || '';
-                let finalArtist = rawArtist === 'YouTube' ? 'Internet' : rawArtist;
-                if (!finalArtist || finalArtist === 'Desconocido') finalArtist = 'Internet';
-                
-                const song = {
-                  id: d.id,
-                  title: d.title,
-                  artist: finalArtist,
-                  artist_name: finalArtist,
-                  file_url: d.url || '',
-                  imageUrl: d.thumbnail_url || d.image_url || '',
-                  image_url: d.thumbnail_url || d.image_url || '',
-                  duration: d.duration_seconds || 0,
-                  duration_seconds: d.duration_seconds || 0,
-                  source: 'youtube',
-                  youtube_id: d.youtube_id || d.id
-                } as Song;
-                
-                const isActive = currentSong?.id === song.id;
-                const songKey = String(song.youtube_id || song.id);
-                const isDownloading = preparingTrackKey === songKey;
-
-                return (
-                  <div
-                    key={`rec-${d.id}`}
-                    className="min-w-[140px] max-w-[160px] md:min-w-[180px] md:max-w-[200px] flex-shrink-0 snap-start bg-white/[0.02] p-4 rounded-2xl hover:bg-white/[0.06] transition-all group cursor-pointer border border-transparent hover:border-white/10 relative"
-                    onClick={() => handleResultClick(d, song, false)}
-                  >
-                    <div className="absolute top-2 left-2 z-10">
-                      <TrackFeedbackMenu
-                        track={{
-                          id: song.id,
-                          youtube_id: song.youtube_id,
-                          title: song.title,
-                          artist: song.artist,
-                          uploader: song.artist,
-                          source: song.source,
-                        }}
-                        onApplied={(type) => {
-                          if (type === 'not_this_track') {
-                            const myId = String(d.youtube_id || d.id || '');
-                            home.setRecommendationsItems((prev) => prev.filter((x: any) => String(x.youtube_id || x.id || '') !== myId));
-                          } else if (type === 'not_this_artist') {
-                            const myArtist = String(song.artist || '').trim();
-                            home.setRecommendationsItems((prev) =>
-                              prev.filter((x: any) => String(x.artist || x.uploader || '').trim() !== myArtist)
-                            );
-                          } else {
-                            refreshRecommendations();
-                          }
-                        }}
-                      />
-                    </div>
-                    {isDownloading && (
-                      <div className="absolute top-2 right-2 z-10 bg-black/60 rounded-full p-1.5 backdrop-blur-sm shadow-md" title="Descargando...">
-                        <Loader2 className="w-3.5 h-3.5 text-violet-400 animate-spin" />
-                      </div>
-                    )}
-                    <div className="relative aspect-square mb-4 rounded-xl overflow-hidden bg-zinc-800/50 shadow-lg">
-                      {song.imageUrl ? (
-                        <img src={song.imageUrl} alt={song.title} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center">
-                          <Music2 className="w-8 h-8 text-zinc-600" />
-                        </div>
-                      )}
-                      
-                      <div className={`absolute bottom-3 right-3 w-12 h-12 bg-violet-500 rounded-full flex items-center justify-center shadow-xl transform transition-all duration-300 ${isActive ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 group-hover:opacity-100 group-hover:translate-y-0'}`}>
-                        {isActive && isPlaying ? (
-                          <Pause className="w-6 h-6 text-white" fill="currentColor" />
-                        ) : (
-                          <Play className="w-6 h-6 text-white ml-1" fill="currentColor" />
-                        )}
-                      </div>
-                    </div>
-                    <h4 className={`font-bold text-base truncate mb-1 ${isActive ? 'text-violet-400' : 'text-white'}`}>
-                      {song.title}
-                    </h4>
-                    <p className="text-sm text-zinc-400 truncate">
-                      {song.artist}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </section>
 
-        {showEmptyState && !forYouError && !recommendationsError && playlists.length === 0 && recommendations.length === 0 && randomPicks.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-24 text-zinc-500">
-            <div className="w-20 h-20 rounded-2xl bg-violet-500/10 flex items-center justify-center mb-5">
-              <Music2 className="w-8 h-8 text-violet-400/50" />
+        {/* DESCUBRE NUEVA MÚSICA */}
+        <section className="mb-10">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-[13px] font-bold tracking-[2px] text-zinc-300 uppercase border-l-2 border-[#a855f7] pl-3">Descubre nueva música</h3>
+            <div className="flex items-center gap-2">
+              <button className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronLeft className="w-5 h-5" /></button>
+              <button className="p-1 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"><ChevronRight className="w-5 h-5" /></button>
             </div>
-            <p className="text-lg font-medium text-zinc-400">Tu mundo musical espera</p>
-            <p className="text-sm mt-1 text-zinc-600">Tu música aparecerá aquí cuando empieces a agregarla</p>
           </div>
-        )}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {recommendations.slice(0, 6).map((d: any) => {
+              const song = {
+                id: d.id, title: d.title, artist: d.artist || 'Internet',
+                imageUrl: d.thumbnail_url || '', source: 'youtube', youtube_id: d.youtube_id || d.id
+              } as Song;
+              return (
+                <div key={d.id} onClick={() => handleResultClick(d, song, false)} className="bg-transparent cursor-pointer group">
+                  <div className="relative aspect-square mb-3 overflow-hidden shadow-lg">
+                    <img src={song.imageUrl} alt={song.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                        <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center"><Play className="w-5 h-5 text-white ml-1" fill="currentColor"/></div>
+                    </div>
+                  </div>
+                  <h4 className="text-white font-bold text-sm truncate">{song.title}</h4>
+                  <p className="text-zinc-400 text-xs truncate">{song.artist}</p>
+                </div>
+              );
+            })}
+          </div>
+        </section>
       </div>
     </div>
   );

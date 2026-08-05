@@ -1,1 +1,14 @@
-services: {}
+# docker-compose.override.yml — Overrides SOLO para desarrollo local
+# Este archivo se aplica automáticamente por docker-compose (no hace falta especificarlo)
+# NO subir al VPS (en producción NO queremos estos overrides)
+
+services:
+  # Publicar puerto del backend para acceso directo desde Windows (Postman, etc.)
+  backend:
+    ports:
+      - "3000:3000"
+
+  # Publicar puerto de la DB para herramientas externas (DBeaver, TablePlus, etc.)
+  db:
+    ports:
+      - "5432:5432"

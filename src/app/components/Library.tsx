@@ -15,6 +15,7 @@ interface LibraryProps {
   onPlaylistClick: (playlist: Playlist) => void;
   onSongPlay: (song: Song, playlist?: Playlist) => void;
   tabOverride?: Tab;
+  onCreatePlaylist?: () => void;
 }
 
 type Tab = 'playlists' | 'recientes' | 'favoritos';
@@ -79,7 +80,7 @@ function SongListItem({
   );
 }
 
-export function Library({ currentSong, isPlaying, onPlaylistClick, onSongPlay, tabOverride }: LibraryProps) {
+export function Library({ currentSong, isPlaying, onPlaylistClick, onSongPlay, tabOverride, onCreatePlaylist }: LibraryProps) {
   const { playlists } = useMusic();
   const [activeTab, setActiveTab] = useState<Tab>('playlists');
   const [likedSongs, setLikedSongs] = useState<Song[]>([]);
@@ -185,177 +186,102 @@ export function Library({ currentSong, isPlaying, onPlaylistClick, onSongPlay, t
   };
 
   return (
-    <div className="flex-1 overflow-auto bg-gradient-to-b from-zinc-900/50 to-black">
-      <div className="p-4 md:p-8 pb-28 md:pb-8">
-        <div className="mb-5 md:mb-7">
-          <h2 className="text-2xl md:text-3xl font-bold text-white mb-4">Tu biblioteca</h2>
-          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-            {tabs.map((tab) => (
+    <div className="flex-1 overflow-auto bg-[#0a0014] text-white">
+      <div className="p-6 md:p-8 pb-28 md:pb-8 pt-14 md:pt-[72px]">
+        <div className="flex items-center justify-between mb-8">
+          <h2 className="text-2xl font-bold tracking-wide">Tu Biblioteca</h2>
+          <button 
+            onClick={onCreatePlaylist}
+            className="bg-white text-black text-[11px] font-bold tracking-widest uppercase px-4 py-2 rounded-sm hover:bg-gray-200 transition-colors"
+          >
+            + NUEVA PLAYLIST
+          </button>
+        </div>
+
+        <div className="flex gap-6 border-b border-white/10 mb-6">
+          {tabs.map((tab) => {
+            if (tab.id === 'recientes') return null;
+            return (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-full transition-all whitespace-nowrap flex-shrink-0 ${
-                  activeTab === tab.id
-                    ? 'bg-violet-500 text-white font-semibold shadow-md shadow-violet-500/20'
-                    : 'bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-white'
+                onClick={() => {
+                  if (tab.id === 'favoritos') {
+                    onPlaylistClick(favoritesPlaylist);
+                  } else {
+                    setActiveTab(tab.id);
+                  }
+                }}
+                className={`pb-3 text-xs font-bold tracking-widest uppercase transition-all relative ${
+                  activeTab === tab.id ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'
                 }`}
               >
-                <tab.icon className="w-4 h-4" />
-                <span className="text-sm">{tab.label}</span>
+                {tab.label}
+                {activeTab === tab.id && (
+                  <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#a855f7]" />
+                )}
               </button>
-            ))}
-          </div>
+            );
+          })}
         </div>
 
         <AnimatePresence mode="wait">
           {activeTab === 'playlists' && (
             <motion.div
               key="playlists"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
               transition={{ duration: 0.15 }}
             >
-              <section className="mb-7">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <button
-                    onClick={() => setActiveTab('favoritos')}
-                    className="bg-white/[0.03] border border-white/5 rounded-xl p-4 flex items-center gap-4 hover:bg-white/[0.06] transition-all text-left w-full"
-                  >
-                    <div className="w-14 h-14 bg-gradient-to-br from-violet-500 to-fuchsia-500 rounded-lg flex items-center justify-center flex-shrink-0 shadow-lg shadow-violet-500/20">
-                      <Heart className="w-7 h-7 text-white" fill="currentColor" />
+              <div className="space-y-1">
+                {/* Custom Favorites Playlist row */}
+                <div
+                  onClick={() => onPlaylistClick(favoritesPlaylist)}
+                  className="group flex items-center justify-between p-3 rounded-md hover:bg-white/[0.04] cursor-pointer transition-colors border-b border-white/[0.02]"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-[#3b0764] rounded-md flex items-center justify-center flex-shrink-0">
+                      <Heart className="w-5 h-5 text-white" fill="currentColor" />
                     </div>
                     <div>
-                      <h3 className="text-white font-semibold">Tus favoritos</h3>
-                      <p className="text-sm text-zinc-500">{likedSongs.length} canciones</p>
+                      <p className="text-[15px] font-bold text-white mb-0.5">Favoritos</p>
+                      <p className="text-[11px] text-zinc-500">Tus canciones con ♥ - {likedSongs.length} canciones</p>
                     </div>
-                  </button>
-
-                  <button
-                    onClick={() => setActiveTab('recientes')}
-                    className="bg-white/[0.03] border border-white/5 rounded-xl p-4 flex items-center gap-4 hover:bg-white/[0.06] transition-all text-left w-full"
-                  >
-                    <div className="w-14 h-14 bg-gradient-to-br from-violet-600 to-indigo-500 rounded-lg flex items-center justify-center flex-shrink-0 shadow-lg shadow-violet-500/20">
-                      <Clock className="w-7 h-7 text-white" />
-                    </div>
-                    <div>
-                      <h3 className="text-white font-semibold">Escuchado recientemente</h3>
-                      <p className="text-sm text-zinc-500">{history.length} canciones</p>
-                    </div>
-                  </button>
-                </div>
-              </section>
-
-              {playlists.length > 0 && (
-                <section className="mb-24 md:mb-0">
-                  <h3 className="text-xl font-bold text-white mb-4">Tus playlists</h3>
-                  <div className="space-y-2">
-                    {playlists.map((playlist) => (
-                      <button
-                        key={playlist.id}
-                        onClick={() => onPlaylistClick(playlist)}
-                        className="w-full flex items-center gap-4 p-3 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.06] transition-all text-left"
-                      >
-                        <div className="w-12 h-12 rounded-lg bg-zinc-800 overflow-hidden flex-shrink-0">
-                          {playlist.image_url ? (
-                            <img src={playlist.image_url} alt={playlist.name} className="w-full h-full object-cover" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-violet-500/20 to-fuchsia-500/20">
-                              <ListMusic className="w-5 h-5 text-violet-400" />
-                            </div>
-                          )}
-                        </div>
-                        <div>
-                          <p className="text-white font-medium text-sm">{playlist.name}</p>
-                          <p className="text-xs text-zinc-500">{playlist.songs?.length || 0} canciones</p>
-                        </div>
-                      </button>
-                    ))}
                   </div>
-                </section>
-              )}
-            </motion.div>
-          )}
+                  <button className="text-zinc-600 hover:text-white px-2">
+                    <span className="tracking-widest">...</span>
+                  </button>
+                </div>
 
-          {activeTab === 'recientes' && (
-            <motion.div
-              key="recientes"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.15 }}
-              className="mb-24 md:mb-0"
-            >
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl font-bold text-white">Escuchado recientemente</h3>
-                <span className="text-sm text-zinc-500">{history.length} canciones</span>
+                {/* User Playlists */}
+                {playlists.map((playlist) => (
+                  <div
+                    key={playlist.id}
+                    onClick={() => onPlaylistClick(playlist)}
+                    className="group flex items-center justify-between p-3 rounded-md hover:bg-white/[0.04] cursor-pointer transition-colors border-b border-white/[0.02]"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-[#312e81] rounded-md overflow-hidden flex items-center justify-center flex-shrink-0">
+                        {playlist.image_url ? (
+                          <img src={playlist.image_url} alt={playlist.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <Music2 className="w-5 h-5 text-white" />
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-[15px] font-bold text-white mb-0.5">{playlist.name}</p>
+                        <p className="text-[11px] text-zinc-500">{playlist.description || 'Lista de reproducción'} - {playlist.songs?.length || 0} canciones</p>
+                      </div>
+                    </div>
+                    <button className="text-zinc-600 hover:text-white px-2">
+                      <span className="tracking-widest">...</span>
+                    </button>
+                  </div>
+                ))}
               </div>
-              {history.length > 0 ? (
-                <div className="space-y-1">
-                  {history.map((song, i) => (
-                    <SongListItem
-                      key={`h-${song.id}-${i}`}
-                      song={song}
-                      index={i + 1}
-                      isActive={currentSong?.id === song.id}
-                      isPlaying={currentSong?.id === song.id && isPlaying}
-                      onPlay={() => onSongPlay(song, recentsPlaylist)}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center py-16 text-zinc-500">
-                  <Clock className="w-10 h-10 mx-auto mb-3 text-zinc-600" />
-                  <p>Aún no has escuchado ninguna canción</p>
-                </div>
-              )}
             </motion.div>
           )}
 
-          {activeTab === 'favoritos' && (
-            <motion.div
-              key="favoritos"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.15 }}
-              className="mb-24 md:mb-0"
-            >
-              <div
-                className="rounded-2xl p-5 mb-5 flex flex-col sm:flex-row items-center gap-4"
-                style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.15), rgba(217,70,239,0.15))' }}
-              >
-                <div className="w-24 h-24 bg-gradient-to-br from-violet-500 to-fuchsia-500 rounded-xl flex items-center justify-center shadow-lg shadow-violet-500/20 flex-shrink-0">
-                  <Heart className="w-12 h-12 text-white" fill="currentColor" />
-                </div>
-                <div className="text-center sm:text-left">
-                  <p className="text-[10px] uppercase tracking-widest text-violet-400/70 font-semibold mb-1">Colección</p>
-                  <h3 className="text-2xl font-black text-white">Tus favoritos</h3>
-                  <p className="text-zinc-500 text-sm mt-1">{likedSongs.length} canciones guardadas</p>
-                </div>
-              </div>
-
-              {likedSongs.length > 0 ? (
-                <div className="space-y-1">
-                  {likedSongs.map((song, i) => (
-                    <SongListItem
-                      key={`f-${song.id}-${i}`}
-                      song={song}
-                      index={i + 1}
-                      isActive={currentSong?.id === song.id}
-                      isPlaying={currentSong?.id === song.id && isPlaying}
-                      onPlay={() => onSongPlay(song, favoritesPlaylist)}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center py-16 text-zinc-500">
-                  <Heart className="w-10 h-10 mx-auto mb-3 text-zinc-600" />
-                  <p>Dale ❤️ a una canción para verla aquí</p>
-                </div>
-              )}
-            </motion.div>
-          )}
         </AnimatePresence>
       </div>
     </div>

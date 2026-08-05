@@ -961,95 +961,125 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
            }
            return;
         }
-        
-        let dlRes = await apiFetch('/api/downloads', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            url: ytId ? `https://www.youtube.com/watch?v=${ytId}` : (url || audioUrl || ''),
-            title: song.title,
-            uploader: song.artist,
-            mode: 'audio',
-            youtube_id: ytId
-          })
-        });
-        let dlData = await dlRes.json().catch(() => null);
-        
+
+        const youtubeWatchUrl = ytId ? `https://www.youtube.com/watch?v=${ytId}` : (url || audioUrl || '');
+
+        // ── PASO 1: Verificar caché local ─────────────────────────────────────
+        if (ytId) {
+          try {
+            const cacheRes = await apiFetch(`/api/downloads/resolve?youtube_id=${encodeURIComponent(ytId)}&mode=audio`);
+            const cacheJson = cacheRes.ok ? await cacheRes.json().catch(() => null) : null;
+            if (cacheJson?.cached && cacheJson?.audioUrl && isMyGen()) {
+              console.log('[playback/prepare] local-cache hit audioUrl=' + cacheJson.audioUrl);
+              finalAudioUrl = `${API_BASE}${cacheJson.audioUrl}`;
+              setPreparingTrackKey(null);
+              // Continúa al bloque de reproducción de abajo
+              // (no entra al POST /api/downloads)
+              // eslint-disable-next-line no-throw-literal
+              throw { _cacheHit: true };
+            }
+          } catch (e: any) {
+            if (e?._cacheHit) throw e; // re-throw para salir al bloque catch
+            // Si falla resolve, continuar con stream-direct
+            console.warn('[playback/prepare] resolve error (fallback to stream-direct)', e?.message);
+          }
+        }
+
+        // ── PASO 2: Reproducción inmediata vía stream-direct (~3-5s) ─────────
+        // Obtiene la URL directa del CDN de Google vía yt-dlp -g, sin descargar el archivo
+        console.log('[playback/prepare] stream-direct start');
+        const streamDirectUrl = `${API_BASE}/api/downloads/stream-direct?url=${encodeURIComponent(youtubeWatchUrl)}`;
+
         if (!isMyGen() || currentPrepareRequestRef.current !== requestId) return;
 
-        if (!dlRes.ok) {
-          const error: any = new Error(dlData?.message || "No pudimos preparar esta canción");
-          error.code = dlData?.code;
-          error.status = dlRes.status;
-          error.payload = dlData;
-          throw error;
-        }
+        // Reproducir inmediatamente con stream-direct
+        finalAudioUrl = streamDirectUrl;
+        console.log('[playback/prepare] stream-direct ready — reproduciendo ahora');
 
-        
-        if (song.youtube_id && dlData?.youtubeId && dlData.youtubeId !== song.youtube_id) {
-           console.warn(`[playback/validate] source-mismatch old=${song.youtube_id} actual=${dlData.youtubeId}`);
-           throw { status: 400, code: 'MISSING_TRACK_SOURCE', message: 'Source mismatch' };
-        }
-        if (dlData?.status === 'ready' && dlData?.audioUrl) {
-          console.log('[playback/prepare] ready audioUrl=' + dlData.audioUrl);
-          finalAudioUrl = dlData.audioUrl;
-        } else if ((dlData.status === 'preparing' || dlRes?.status === 202) && dlData.jobId) {
-          console.log(`[playback/prepare] pending jobId=${dlData.jobId}`);
-          console.log('[playback/prepare] polling');
-          let attempts = 60;
-          let resolved = null;
-          while (attempts > 0 && isMyGen()) {
-            await new Promise(r => setTimeout(r, 2000));
-            const statRes = await apiFetch(`/api/downloads/status/${dlData.jobId}`);
-            const statData = await statRes.json().catch(() => null);
-            if (statData?.status === 'ready' && statData?.audioUrl) {
-              resolved = statData.audioUrl;
-              break;
-            } else if (statData?.status === 'failed') {
-              throw new Error(statData.message || 'Worker failed');
+        // ── PASO 3: Descarga en background para caché local ───────────────────
+        // No esperamos — se ejecuta en paralelo mientras la música ya suena
+        const downloadInBackground = async () => {
+          try {
+            console.log('[playback/bg-download] start youtubeId=' + ytId);
+            const dlRes = await apiFetch('/api/downloads', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                url: youtubeWatchUrl,
+                title: song.title,
+                uploader: song.artist,
+                mode: 'audio',
+                youtube_id: ytId
+              })
+            });
+            const dlData = await dlRes.json().catch(() => null);
+            
+            if (dlData?.status === 'preparing' && dlData?.jobId) {
+              // Esperar en background hasta que esté lista
+              let attempts = 90; // 3 minutos máximo
+              while (attempts > 0) {
+                await new Promise(r => setTimeout(r, 2000));
+                const statRes = await apiFetch(`/api/downloads/status/${dlData.jobId}`);
+                const statData = await statRes.json().catch(() => null);
+                if (statData?.status === 'ready') {
+                  console.log('[playback/bg-download] cached audioUrl=' + statData.audioUrl);
+                  break;
+                } else if (statData?.status === 'failed') {
+                  console.warn('[playback/bg-download] failed — stream-direct seguirá funcionando');
+                  break;
+                }
+                attempts--;
+              }
+            } else if (dlData?.status === 'ready') {
+              console.log('[playback/bg-download] instant-cache audioUrl=' + dlData.audioUrl);
             }
-            attempts--;
+          } catch (e: any) {
+            // No afecta la reproducción actual — es solo para caché futura
+            console.warn('[playback/bg-download] error (no crítico):', e?.message);
           }
-          if (!isMyGen() || currentPrepareRequestRef.current !== requestId) return;
-          if (!resolved) throw new Error('Timeout resolving audio');
-          console.log('[playback/prepare] ready audioUrl=' + resolved);
-          finalAudioUrl = resolved;
-        } else {
-          throw new Error('No pudimos preparar esta canción');
-        }
+        };
+
+        // Lanzar en background sin await
+        void downloadInBackground();
         
       } catch (err: any) {
-        console.debug("[playback/prepare] error payload", {
-          status: err?.status,
-          code: err?.code,
-          message: err?.message,
-          payload: err?.payload,
-          track: song
-        });
-        
-        if (
-          err?.code === "MISSING_TRACK_SOURCE_CLIENT" ||
-          err?.code === "MISSING_TRACK_SOURCE" ||
-          (err?.status === 400 && song?.title && (song?.artist || song?.artist_name))
-        ) {
-          console.debug(`[playback/repair] start reason=${err?.code || '400_MISSING_SOURCE'}`);
-          const repairedSong = await repairTrack(song);
-          if (repairedSong && isMyGen()) {
-            console.log('[playback/repair] retry prepare');
-            playSongInternal(repairedSong, playlist, isCrossfade, opts);
-            return;
-          }
-        }
-        
-        console.log('[playback/prepare] failed', err);
-        if (isMyGen()) {
-          setPlaybackError('No pudimos preparar esta canción. Intenta con otra.');
-          setPlaybackErrorTrackKey(songKey);
+        // Si es un cache hit, finalAudioUrl ya está seteado, continuar
+        if (err?._cacheHit) {
+          // No hacer nada — finalAudioUrl está listo arriba
+        } else {
+          console.debug("[playback/prepare] error payload", {
+            status: err?.status,
+            code: err?.code,
+            message: err?.message,
+            payload: err?.payload,
+            track: song
+          });
           
+          if (
+            err?.code === "MISSING_TRACK_SOURCE_CLIENT" ||
+            err?.code === "MISSING_TRACK_SOURCE" ||
+            (err?.status === 400 && song?.title && (song?.artist || song?.artist_name))
+          ) {
+            console.debug(`[playback/repair] start reason=${err?.code || '400_MISSING_SOURCE'}`);
+            const repairedSong = await repairTrack(song);
+            if (repairedSong && isMyGen()) {
+              console.log('[playback/repair] retry prepare');
+              playSongInternal(repairedSong, playlist, isCrossfade, opts);
+              return;
+            }
+          }
+          
+          console.log('[playback/prepare] failed', err);
+          if (isMyGen()) {
+            setPlaybackError('No pudimos preparar esta canción. Intenta con otra.');
+            setPlaybackErrorTrackKey(songKey);
+            
+          }
+          return;
         }
-        return;
       }
     }
+
 
     let audio: HTMLAudioElement;
     if (preloadedAudioRef.current && preloadedAudioRef.current.src.includes(finalAudioUrl)) {
@@ -1242,8 +1272,13 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
 
     audio.ontimeupdate = () => {
       if (audioRef.current !== audio) return;
-      if (!audio.duration) return;
-      const prog = (audio.currentTime / audio.duration) * 100;
+      let dur = audio.duration;
+      if (!dur || isNaN(dur) || dur === Infinity) {
+        dur = playerStateRef.current?.currentSong?.durationSecs || playerStateRef.current?.currentSong?.duration_seconds || 0;
+      }
+      if (!dur) return;
+      if (!audio.paused && !isPlaying) setIsPlaying(true);
+      const prog = (audio.currentTime / dur) * 100;
       setProgress(prog);
 
       if (prog >= 80 && !bufferDoneRef.current) {

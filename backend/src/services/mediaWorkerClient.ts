@@ -130,10 +130,10 @@ let _cachedCapabilities: WorkerCapabilities | null = null;
 let _cachedCapabilitiesAt = 0;
 let _workerUnhealthyUntil = 0;
 const CAPABILITIES_TTL_MS = 60_000;
-const UNHEALTHY_COOLDOWN_MS = 30_000;
+const UNHEALTHY_COOLDOWN_MS = 10_000;
 
-// Health siempre usa timeout corto (3s) para no bloquear requests
-const HEALTH_TIMEOUT_MS = 3000;
+// Health con timeout más permisivo porque el worker en Termux es mono-hilo y puede estar ocupado buscando
+const HEALTH_TIMEOUT_MS = 8000;
 
 export const workerHealth = async (): Promise<{
   ok: boolean;

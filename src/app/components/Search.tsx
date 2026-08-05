@@ -1,5 +1,5 @@
 import { Search as SearchIcon, Music2, Play, Pause, Loader2, Download as DownloadIcon, X, History, Trash2 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Input } from './ui/input';
 import { downloadToSong } from './Downloads';
 import { auth, db } from '../../firebaseConfig';
@@ -13,6 +13,7 @@ import { LoadErrorState } from './LoadErrorState';
 import { makeSafeYoutubeWatchUrl } from '../track';
 import { TrackCover } from './TrackCover';
 import { TrackFeedbackMenu } from './TrackFeedbackMenu';
+import { SearchAutocomplete, addRecentSearchToLocalStorage } from './SearchAutocomplete';
 
 interface Download {
   id: number | string;
@@ -33,12 +34,19 @@ interface SearchProps {
   onSongPlay: (song: any) => void;
   currentSong: { id: number | string } | null;
   isPlaying: boolean;
+  searchQuery?: string;
+  onSearchQueryChange?: (q: string) => void;
 }
 
-export function Search({ onSongPlay, currentSong, isPlaying }: SearchProps) {
+export function Search({ onSongPlay, currentSong, isPlaying, searchQuery: propSearchQuery, onSearchQueryChange }: SearchProps) {
   const { settings } = useAppSettings();
   const { preparingTrackKey } = usePlayback();
-  const [searchQuery, setSearchQuery] = useState('');
+  
+  const [localSearchQuery, setLocalSearchQuery] = useState('');
+  const searchQuery = propSearchQuery !== undefined ? propSearchQuery : localSearchQuery;
+  const setSearchQuery = onSearchQueryChange || setLocalSearchQuery;
+  const [isFocused, setIsFocused] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [searchResults, setSearchResults] = useState<Download[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -221,6 +229,37 @@ return;
     }
   };
 
+  const handleSearchSubmit = (e?: React.FormEvent, customQuery?: string) => {
+    if (e) e.preventDefault();
+    if (customQuery) setSearchQuery(customQuery);
+    setIsFocused(false);
+    inputRef.current?.blur();
+    
+    const currentTyped = (customQuery ?? searchQuery).trim();
+    if (currentTyped.length > 0) {
+      addRecentSearchToLocalStorage({ id: Date.now().toString(), type: 'text', query: currentTyped });
+      upsertRecent(currentTyped).catch(() => {});
+    }
+  };
+
+  const handlePlayTrack = async (trackName: string) => {
+    setSearchQuery(trackName);
+    setIsFocused(false);
+    inputRef.current?.blur();
+    try {
+      const { res, items } = await apiFetchItems<any>(`/api/music/search?q=${encodeURIComponent(trackName)}&mode=search`);
+      if (res.ok && items && items.length > 0) {
+        handleResultClick(items[0]);
+        upsertRecent(trackName).catch(() => {});
+      } else {
+        // Fallback
+        handleSearchSubmit(undefined, trackName);
+      }
+    } catch (e) {
+      handleSearchSubmit(undefined, trackName);
+    }
+  };
+
   useEffect(() => {
     if (searchQuery.trim() === '') {
       setSearchResults([]);
@@ -281,29 +320,43 @@ return;
   }, [searchQuery, retryTick]);
 
   return (
-    <div className="flex-1 overflow-auto bg-gradient-to-b from-zinc-900/50 to-black p-4 md:p-8 hide-scrollbar" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
-      <div className="sticky top-0 z-20 bg-zinc-900/80 backdrop-blur-xl -mx-4 -mt-4 px-4 pt-4 md:-mx-8 md:-mt-8 md:px-8 md:pt-8 pb-6 border-b border-white/5">
-        <div className="relative max-w-3xl mx-auto">
-          <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-6 h-6 text-zinc-400" />
+    <div className="flex-1 overflow-auto bg-[#080010] p-4 md:p-8 pt-14 md:pt-[72px] hide-scrollbar" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+      <div className="sticky top-0 z-20 bg-[#080010]/90 backdrop-blur-xl -mx-4 -mt-4 px-4 pt-4 md:-mx-8 md:-mt-8 md:px-8 md:pt-2 pb-3 border-b border-white/5">
+        <div className="relative max-w-[450px]">
+          <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#a855f7]" />
           <Input
+            ref={inputRef}
             type="search"
-            placeholder="¿Qué quieres escuchar hoy?"
-            className="w-full bg-white/10 border-transparent hover:bg-white/[0.15] hover:border-white/20 rounded-full pl-12 pr-6 py-4 text-lg text-white placeholder-zinc-400 focus:bg-white/20 focus:ring-4 focus:ring-violet-500/30 focus:border-violet-500/50 transition-all shadow-lg"
+            placeholder="Busca canciones, artistas, álbumes..."
+            className="w-full bg-[#1c0226] border-0 border-b-2 border-b-[#a855f7] rounded-none pl-12 pr-10 py-4 text-[15px] text-white placeholder-zinc-500 focus:outline-none focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-b-[#a855f7] transition-all"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                const currentTyped = searchQuery.trim();
-                if (currentTyped.length > 0) {
-                  upsertRecent(currentTyped).catch(() => {});
-                }
-              }
+              if (e.key === 'Enter') handleSearchSubmit(e);
             }}
           />
+          <SearchAutocomplete 
+            query={searchQuery}
+            isVisible={isFocused}
+            onSelectText={(text) => handleSearchSubmit(undefined, text)}
+            onSelectTrack={handlePlayTrack}
+            onClose={() => setIsFocused(false)}
+            className="w-[110%] -left-[5%] lg:w-[120%] lg:-left-[10%]"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 
-      <div className="mt-8 max-w-[1400px] mx-auto">
+      <div className="mt-8 w-full">
         {searchQuery ? (
           <section className="mb-24">
             <div className="flex items-center justify-between mb-6">
@@ -325,7 +378,7 @@ return;
             {loading ? (
               <div className="flex flex-col items-center justify-center py-20">
                 <Loader2 className="w-10 h-10 text-violet-500 animate-spin mb-4" />
-                <p className="text-zinc-400 text-lg font-medium animate-pulse">Explorando el catálogo...</p>
+                <p className="text-zinc-500 text-lg font-medium animate-pulse">Explorando el catálogo...</p>
               </div>
             ) : searchResults.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -399,75 +452,94 @@ return;
             )}
           </section>
         ) : (
-          <div className="py-8">
-            {recentSearches.length > 0 ? (
-              <div className="max-w-[1400px] mx-auto">
-                <div className="flex items-center justify-between mb-8">
-                  <div className="flex items-center gap-2">
-                    <History className="w-5 h-5 text-violet-400" />
-                    <h3 className="text-xl font-bold text-white tracking-tight">Búsquedas recientes</h3>
-                  </div>
-                  <button
-                    onClick={clearRecent}
-                    className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Borrar todo
-                  </button>
+          <div className="py-2">
+            <div className="w-full">
+              {/* Explorar Géneros */}
+              <div className="mb-10">
+                <div className="flex items-center justify-between mb-6 border-l-2 border-white pl-3">
+                  <h3 className="text-[13px] font-bold tracking-[2px] text-white uppercase">Explorar Géneros</h3>
                 </div>
-                <motion.div 
-                  className="flex flex-wrap gap-3"
-                  initial="hidden"
-                  animate="visible"
-                  variants={{
-                    hidden: { opacity: 0 },
-                    visible: {
-                      opacity: 1,
-                      transition: { staggerChildren: 0.05 }
-                    }
-                  }}
-                >
-                  <AnimatePresence>
-                    {recentSearches.map((q) => (
-                      <motion.div
-                        key={q}
-                        variants={{
-                          hidden: { opacity: 0, scale: 0.8 },
-                          visible: { opacity: 1, scale: 1 },
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {[
+                    { name: 'Reggaeton', color: 'from-[#831843]/80 to-[#4c1d95]/80' },
+                    { name: 'Pop', color: 'from-[#9d174d]/80 to-[#5b21b6]/80' },
+                    { name: 'Trap', color: 'from-[#312e81]/80 to-[#4c1d95]/80' },
+                    { name: 'Electrónica', color: 'from-[#4c1d95]/80 to-[#1e3a8a]/80' },
+                    { name: 'Latin', color: 'from-[#be123c]/80 to-[#831843]/80' },
+                    { name: 'Flamenco', color: 'from-[#701a75]/80 to-[#4a044e]/80' },
+                    { name: 'R&B', color: 'from-[#86198f]/80 to-[#4c1d95]/80' },
+                    { name: 'Hip Hop', color: 'from-[#1e3a8a]/80 to-[#312e81]/80' },
+                    { name: 'Rock', color: 'from-[#581c87]/80 to-[#3b0764]/80' },
+                    { name: 'Indie', color: 'from-[#d946ef]/60 to-[#c084fc]/60' },
+                    { name: 'Jazz', color: 'from-[#3b0764]/80 to-[#172554]/80' },
+                    { name: 'Podcast', color: 'from-[#86198f]/80 to-[#701a75]/80' }
+                    ].map((genre) => (
+                      <button
+                        key={genre.name}
+                        onClick={() => {
+                          setSearchQuery(genre.name);
+                          upsertRecent(genre.name).catch(() => {});
                         }}
-                        exit={{ opacity: 0, scale: 0.8, transition: { duration: 0.15 } }}
-                        className="group relative flex items-center bg-white/[0.03] border border-white/5 rounded-full hover:bg-white/[0.08] hover:border-violet-500/30 transition-colors"
+                        className={`relative h-28 rounded-none overflow-hidden group bg-gradient-to-br ${genre.color}`}
                       >
-                        <button
-                          onClick={() => {
-                            setSearchQuery(q);
-                            upsertRecent(q).catch(() => {});
-                          }}
-                          className="px-5 py-2.5 text-sm font-medium text-zinc-300 group-hover:text-white transition-colors whitespace-nowrap"
-                        >
-                          {q}
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            removeRecent(q);
-                          }}
-                          className="pr-4 pl-2 py-2.5 text-zinc-500 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100 -ml-2"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </motion.div>
+                        <div className="absolute inset-0 bg-black/10 group-hover:bg-black/0 transition-colors" />
+                        <span className="absolute bottom-3 left-4 text-sm font-bold text-white shadow-sm">{genre.name}</span>
+                      </button>
                     ))}
-                  </AnimatePresence>
-                </motion.div>
+                </div>
               </div>
-            ) : (
-              <div className="text-center py-32">
-                <SearchIcon className="w-16 h-16 text-zinc-600 mx-auto mb-6 opacity-20" />
-                <h2 className="text-white text-3xl font-bold mb-3 tracking-tight">Busca lo que quieras</h2>
-                <p className="text-zinc-500 text-lg max-w-md mx-auto">Encuentra tus canciones favoritas, artistas y descubre nueva música en todo el catálogo.</p>
-              </div>
-            )}
+
+              {/* Búsquedas recientes */}
+              {recentSearches.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-6 border-l-2 border-white pl-3">
+                    <h3 className="text-[13px] font-bold tracking-[2px] text-white uppercase">Búsquedas Recientes</h3>
+                  </div>
+                  <motion.div 
+                    className="flex flex-wrap gap-2"
+                    initial="hidden"
+                    animate="visible"
+                    variants={{
+                      hidden: { opacity: 0 },
+                      visible: { opacity: 1, transition: { staggerChildren: 0.05 } }
+                    }}
+                  >
+                    <AnimatePresence>
+                      {recentSearches.map((q) => (
+                        <motion.div
+                          key={q}
+                          variants={{
+                            hidden: { opacity: 0, scale: 0.8 },
+                            visible: { opacity: 1, scale: 1 },
+                          }}
+                          exit={{ opacity: 0, scale: 0.8, transition: { duration: 0.15 } }}
+                          className="group relative flex items-center bg-[#1c0226] rounded-none hover:bg-[#2a0638] transition-colors shadow-sm"
+                        >
+                          <button
+                            onClick={() => {
+                              setSearchQuery(q);
+                              upsertRecent(q).catch(() => {});
+                            }}
+                            className="px-4 py-2 text-[13px] font-bold text-white transition-colors whitespace-nowrap"
+                          >
+                            {q}
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeRecent(q);
+                            }}
+                            className="pr-2 py-2 text-zinc-500 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </motion.div>
+                      ))}
+                    </AnimatePresence>
+                  </motion.div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
