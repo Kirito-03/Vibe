@@ -21,16 +21,17 @@ services:
       - internal
 
   frontend:
-    image: nginx:alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
     container_name: vns_frontend
     restart: unless-stopped
-    expose:
-      - "80"
-    volumes:
-      - ./dist:/usr/share/nginx/html:ro
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "80:80"
     networks:
       - internal
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
 
   frontend_dev:
     image: node:20-alpine
@@ -40,11 +41,23 @@ services:
     ports:
       - "5173:5173"
     environment:
+      # API en blanco = Vite usará su proxy interno → http://backend:3000
       VITE_API_BASE: ""
+      # Firebase (build-time vars para Vite)
+      VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY}
+      VITE_FIREBASE_AUTH_DOMAIN: ${VITE_FIREBASE_AUTH_DOMAIN}
+      VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID}
+      VITE_FIREBASE_STORAGE_BUCKET: ${VITE_FIREBASE_STORAGE_BUCKET}
+      VITE_FIREBASE_MESSAGING_SENDER_ID: ${VITE_FIREBASE_MESSAGING_SENDER_ID}
+      VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID}
+      VITE_FIREBASE_MEASUREMENT_ID: ${VITE_FIREBASE_MEASUREMENT_ID}
+      VITE_IMGBB_KEY: ${VITE_IMGBB_KEY}
+      # Polling para HMR en WSL2/Windows bind mounts (evita que los cambios no se detecten)
+      CHOKIDAR_USEPOLLING: "true"
     volumes:
       - ./:/app
       - /app/node_modules
-    command: ["sh", "-lc", "npm ci && npm run dev -- --host 0.0.0.0 --port 5173"]
+    command: ["sh", "-lc", "npm install --prefer-offline && npm run dev -- --host 0.0.0.0 --port 5173"]
     depends_on:
       - backend
     networks:
@@ -93,6 +106,8 @@ services:
       - "3000"
     env_file:
       - ./backend/.env.docker
+    # En local: publicar puerto para acceso directo (ej. desde Postman o VS Code)
+    # En VPS: quitar ports y dejar sólo expose (Nginx hace el proxy)
     environment:
       PORT: "3000"
       DB_USER: ${DB_USER:-postgres}
