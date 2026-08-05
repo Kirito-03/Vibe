@@ -161,6 +161,9 @@ services:
     command: ["tunnel", "run"]
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:?TUNNEL_TOKEN is required}
+    extra_hosts:
+      - "localhost:host-gateway"
+      - "127.0.0.1:host-gateway"
     depends_on:
       - frontend
       - backend
