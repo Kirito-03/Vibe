@@ -81,10 +81,7 @@ services:
       dockerfile: Dockerfile
     container_name: vns_convert
     restart: unless-stopped
-    dns:
-      - 172.28.0.53
-    ports:
-      - "127.0.0.1:8000:8000"
+    network_mode: "host"
     environment:
       STORAGE_DIR: /app/downloads
       PYTHONUNBUFFERED: "1"
@@ -100,8 +97,6 @@ services:
       - mp3_storage:/app/downloads
       - ./Convert/cookies.txt:/app/cookies.txt:ro
     command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
-    networks:
-      - internal
 
   backend:
     build:
@@ -142,17 +137,6 @@ services:
     volumes:
       - mp3_storage:/app/downloads
       - ./backend/cla2.json:/app/cla2.json:ro
-
-  dns:
-    image: m13253/dns-over-https-client:latest
-    container_name: vns_dns
-    restart: unless-stopped
-    expose:
-      - "53/udp"
-      - "53/tcp"
-    networks:
-      internal:
-        ipv4_address: 172.28.0.53
 
   tunnel:
     image: cloudflare/cloudflared:latest
