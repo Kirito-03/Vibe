@@ -36,10 +36,7 @@ services:
         VITE_IMGBB_KEY: ${VITE_IMGBB_KEY}
     container_name: vns_frontend
     restart: unless-stopped
-    expose:
-      - "80"
-    networks:
-      - internal
+    network_mode: "host"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
 
