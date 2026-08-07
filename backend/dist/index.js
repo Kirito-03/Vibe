@@ -51,6 +51,7 @@ const deepseekTimeoutMs = (() => {
     const raw = Number.parseInt(process.env.DEEPSEEK_TIMEOUT_MS || '5000', 10);
     return Number.isFinite(raw) && raw > 0 ? raw : 5000;
 })();
+app.set('trust proxy', 1);
 // Middleware: Escudo Modificado para permitir a Capacitor (Android)
 const baseOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['http://localhost:5173'];
 const allowedOrigins = [...baseOrigins, 'http://localhost', 'capacitor://localhost'];
