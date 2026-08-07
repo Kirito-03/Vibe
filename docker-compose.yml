@@ -148,6 +148,7 @@ services:
     extra_hosts:
       - "localhost:host-gateway"
       - "127.0.0.1:host-gateway"
+      - "muxivo_app:host-gateway"
     depends_on:
       - frontend
       - backend
