@@ -3,13 +3,13 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install
+RUN npm install -g typescript && npm install
 
 COPY tsconfig.json ./
 COPY *.json ./
 COPY src ./src
 
-RUN ./node_modules/.bin/tsc -p tsconfig.json
+RUN tsc -p tsconfig.json
 
 FROM node:20-alpine
 
