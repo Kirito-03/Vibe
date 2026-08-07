@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import axios from 'axios';
 import pool from './db';
 import authRoutes from './routes/auth';
@@ -40,6 +42,43 @@ const deepseekTimeoutMs = (() => {
 const baseOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['http://localhost:5173'];
 const allowedOrigins = [...baseOrigins, 'http://localhost', 'capacitor://localhost'];
 
+// ─── Security: Helmet (HTTP headers) ────────────────────────────────────────
+app.use(helmet({
+  contentSecurityPolicy: false, // Desactivado: el CSP lo gestiona Cloudflare/Nginx
+  crossOriginEmbedderPolicy: false, // Necesario para que el audio funcione
+}));
+
+// ─── Security: Rate Limiting ──────────────────────────────────────────────────
+// Límite general: 200 peticiones cada 15 minutos por IP
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, code: 'RATE_LIMIT', message: 'Demasiadas peticiones. Inténtalo más tarde.' },
+});
+
+// Límite de auth: 20 intentos de login cada 15 minutos (anti brute-force)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, code: 'RATE_LIMIT_AUTH', message: 'Demasiados intentos de autenticación.' },
+});
+
+// Límite de música: 60 búsquedas por minuto por IP (anti-scraping)
+const musicLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, code: 'RATE_LIMIT_MUSIC', message: 'Límite de búsquedas alcanzado. Espera un momento.' },
+});
+
+app.use(express.json({ limit: '2mb', strict: false }));
+app.use(express.text({ limit: '2mb', type: '*/*' }));
+
 app.use(cors({
   origin: allowedOrigins,
   credentials: true,
@@ -47,17 +86,14 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
-app.use(express.json({ limit: '50mb', strict: false }));
-app.use(express.text({ limit: '50mb', type: '*/*' }));
-
 app.get('/health', (_req, res) => res.status(200).send('ok'));
 
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/music', requireAuth, musicRoutes);
-app.use('/api/downloads', requireAuth, downloadsRoutes);
-app.use('/api/user', requireAuth, userRoutes);
-app.use('/api/dev', requireAuth, devRoutes);
+// Routes con rate limiting diferenciado
+app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/music', generalLimiter, musicLimiter, requireAuth, musicRoutes);
+app.use('/api/downloads', generalLimiter, requireAuth, downloadsRoutes);
+app.use('/api/user', generalLimiter, requireAuth, userRoutes);
+app.use('/api/dev', generalLimiter, requireAuth, devRoutes);
 
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('[express] unhandled error', {
