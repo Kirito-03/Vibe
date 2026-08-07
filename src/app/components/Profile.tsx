@@ -10,6 +10,7 @@ import { apiClearRecommendationCache, apiClearSeenTracks, apiFetch } from '../ap
 import { usePlayback } from '../context/PlaybackContext';
 import { useHomeData } from '../context/HomeDataContext';
 import { PrivacyPolicy } from './PrivacyPolicy';
+import { TermsOfService } from './TermsOfService';
 
 interface ProfileProps {
   user: FirebaseUser | null;
@@ -21,6 +22,7 @@ export function Profile({ user, onLogout, onProfileUpdate }: ProfileProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [showReset, setShowReset] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
   const [resetConfirm, setResetConfirm] = useState('');
   const [resetLoading, setResetLoading] = useState(false);
   const [resetSubmitting, setResetSubmitting] = useState(false);
@@ -296,13 +298,14 @@ export function Profile({ user, onLogout, onProfileUpdate }: ProfileProps) {
           <div className="flex justify-center gap-4 text-sm text-zinc-500">
             <button className="hover:text-white transition-colors">Ayuda</button>
             <span>•</span>
-            <button onClick={() => setShowPrivacy(true)} className="hover:text-white transition-colors">Términos</button>
+            <button onClick={() => setShowTerms(true)} className="hover:text-white transition-colors">Términos</button>
             <span>•</span>
             <button onClick={() => setShowPrivacy(true)} className="hover:text-white transition-colors">Privacidad</button>
           </div>
           <p className="text-xs text-zinc-600">© 2026 Vibe. Todos los derechos reservados.</p>
         </div>
         {showPrivacy && <PrivacyPolicy onClose={() => setShowPrivacy(false)} />}
+        {showTerms && <TermsOfService onClose={() => setShowTerms(false)} />}
       </div>
 
       {showReset && (
