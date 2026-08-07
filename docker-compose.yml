@@ -107,6 +107,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      network: host
     container_name: vns_backend
     restart: unless-stopped
     network_mode: "host"
