@@ -48,6 +48,8 @@ VERSION = "2.0.0"
 LISTEN_HOST = "0.0.0.0"
 LISTEN_PORT = 5001
 
+WORKER_TOKEN = os.getenv("WORKER_TOKEN", "").strip()
+
 DOWNLOADS_DIR = Path(os.getenv("WORKER_DOWNLOADS_DIR", "worker_downloads")).resolve()
 INDEX_PATH = (DOWNLOADS_DIR / "index.json").resolve()
 
@@ -108,6 +110,66 @@ _ALLOWED_PLATFORMS = (
 
 app = Flask(__name__)
 
+from flask import g
+
+@app.before_request
+def before_request_hook():
+    g._req_t0 = time.time()
+    
+    # 1. Logging inicio request (estilo Muxivo)
+    try:
+        qs = request.query_string.decode("utf-8", errors="ignore") if request.query_string else ""
+        start_line = f">> {request.method} {request.path}"
+        if qs:
+            start_line += f"?{qs}"
+        body_preview = ""
+        if request.method in ("POST", "PUT", "PATCH"):
+            ct = (request.headers.get("Content-Type") or "").lower()
+            if "application/json" in ct:
+                data = request.get_json(silent=True)
+                if isinstance(data, dict):
+                    redacted = {}
+                    for k, v in data.items():
+                        s = str(v)
+                        redacted[str(k)] = (s[:150] + "...") if len(s) > 150 else s
+                    body_preview = f" body={redacted}"
+            else:
+                body_preview = " body=[non-json]"
+        print(start_line + body_preview, flush=True)
+    except Exception:
+        pass
+
+    # 2. Validación de Token
+    if request.path in ("/", "/health") or request.path.startswith("/files/"):
+        return None  # Rutas públicas permitidas sin token
+    
+    if WORKER_TOKEN:
+        auth_header = request.headers.get("Authorization", "")
+        token_header = request.headers.get("X-Worker-Token", "")
+        
+        req_token = ""
+        if auth_header.startswith("Bearer "):
+            req_token = auth_header[7:].strip()
+        if not req_token and token_header:
+            req_token = token_header.strip()
+            
+        if req_token != WORKER_TOKEN:
+            print(f"[WORKER] Acceso denegado. Token inválido en {request.path}", flush=True)
+            return jsonify({"ok": False, "message": "Unauthorized"}), 401
+
+@app.after_request
+def after_request_hook(resp):
+    try:
+        start = getattr(g, "_req_t0", None)
+        ms = int((time.time() - start) * 1000) if start else None
+        if ms is None:
+            line = f"{request.method} {request.path} -> {resp.status_code}"
+        else:
+            line = f"{request.method} {request.path} -> {resp.status_code} ({ms}ms)"
+        print(line, flush=True)
+    except Exception:
+        pass
+    return resp
 
 # ---------------------------------------------------------------------------
 # Utilidades básicas
@@ -506,9 +568,10 @@ _IMAGE_CDN_RE = re.compile(
 
 _IMG_REJECT_PATTERNS = (
     "avatar", "icon", "emoji", "sticker", "placeholder",
-    "default_", "100x100", "168x168", "720x720",
+    "default_", "100x100", "150x150", "168x168", "720x720",
+    "72x72", "120x120", "200x200", "300x300", "p16-profile", "profile_pic",
     "musically", "/obj/musically", "watermark",
-    "/tos-alisg-i-", "profile", "logo", "badge",
+    "/tos-alisg-i-", "profile", "logo", "badge", "s150x150"
 )
 
 
@@ -806,9 +869,18 @@ def _extract_instagram_gallery(url: str) -> List[str]:
             if thumbnails:
                 urls = [t.get("url") for t in thumbnails if t.get("url")]
                 if urls:
-                    return [u for u in urls if u.startswith("http")]
+                    filtered = []
+                    for u in urls:
+                        if not u.startswith("http"):
+                            continue
+                        low = u.lower()
+                        if any(p in low for p in _IMG_REJECT_PATTERNS):
+                            continue
+                        filtered.append(u)
+                    if filtered:
+                        return filtered
             thumb = data.get("thumbnail")
-            if thumb:
+            if thumb and not any(p in thumb.lower() for p in _IMG_REJECT_PATTERNS):
                 return [thumb]
     except Exception as exc:
         print(f"[WORKER/extract] instagram ytdlp failed: {exc}", flush=True)
@@ -1392,7 +1464,7 @@ def download_media():
                 aq_map = {"360": "7", "720": "5", "1080": "2", "0": "0"}
                 aq = aq_map.get(quality, "5")
                 cmd += ["--extract-audio", "--audio-format", "mp3", "--audio-quality", aq]
-            elif fmt in _AUDIO_EXTS and ffmpeg_ok and fmt != "m4a":
+            elif fmt in _AUDIO_EXTS and ffmpeg_ok:
                 cmd += ["--extract-audio", "--audio-format", fmt]
         else:
             # Video
