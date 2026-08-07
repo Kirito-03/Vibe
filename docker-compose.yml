@@ -7,8 +7,8 @@ services:
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
       POSTGRES_DB: ${DB_NAME:-vibe}
-    expose:
-      - "5432"
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/scripts/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
@@ -81,8 +81,8 @@ services:
     restart: unless-stopped
     dns:
       - 172.28.0.53
-    expose:
-      - "8000"
+    ports:
+      - "127.0.0.1:8000:8000"
     environment:
       STORAGE_DIR: /app/downloads
       PYTHONUNBUFFERED: "1"
@@ -105,29 +105,26 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-      network: host
     container_name: vns_backend
     restart: unless-stopped
+    network_mode: "host"
     depends_on:
       db:
         condition: service_healthy
       convert:
         condition: service_started
-    expose:
-      - "3000"
     env_file:
       - ./backend/.env.docker
-    # En local: publicar puerto para acceso directo (ej. desde Postman o VS Code)
-    # En VPS: quitar ports y dejar sólo expose (Nginx hace el proxy)
     environment:
       NODE_OPTIONS: "--dns-result-order=ipv4first"
       PORT: "3000"
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
       DB_NAME: ${DB_NAME:-vibe}
-      CONVERT_URL: ${CONVERT_URL:-http://convert:8000}
+      DB_HOST: "127.0.0.1"
+      CONVERT_URL: "http://127.0.0.1:8000"
+      DOWNLOADER_URL: "http://127.0.0.1:8000"
       CONVERT_TIMEOUT_MS: ${CONVERT_TIMEOUT_MS:-20000}
-      DOWNLOADER_URL: ${CONVERT_URL:-http://convert:8000}
       MEDIA_WORKER_URL: ${MEDIA_WORKER_URL:-}
       MEDIA_WORKER_ENABLED: ${MEDIA_WORKER_ENABLED:-false}
       MEDIA_WORKER_TIMEOUT_MS: ${MEDIA_WORKER_TIMEOUT_MS:-30000}
@@ -138,14 +135,9 @@ services:
       DEEPSEEK_TIMEOUT_MS: ${DEEPSEEK_TIMEOUT_MS:-5000}
       DEEPSEEK_MAX_QUERIES: ${DEEPSEEK_MAX_QUERIES:-8}
       RECOMMENDATION_SEEN_TTL_HOURS: ${RECOMMENDATION_SEEN_TTL_HOURS:-24}
-    dns:
-      - 172.28.0.53
-      - 1.1.1.1
     volumes:
       - mp3_storage:/app/downloads
       - ./backend/cla2.json:/app/cla2.json:ro
-    networks:
-      - internal
 
   dns:
     image: m13253/dns-over-https-client:latest
