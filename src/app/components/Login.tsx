@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { PrivacyPolicy } from './PrivacyPolicy';
 import { Eye, EyeOff } from 'lucide-react';
 import { auth } from '../../firebaseConfig';
 import { GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithCredential, sendPasswordResetEmail } from 'firebase/auth';
@@ -13,6 +14,7 @@ export function Login({ onLogin }: LoginProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPrivacy, setShowPrivacy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
@@ -352,11 +354,12 @@ export function Login({ onLogin }: LoginProps) {
           {/* Footer legal */}
           <p className="login-legal">
             Al continuar, aceptas los{' '}
-            <a href="#" className="login-legal-link">Términos de Servicio</a>
+            <button onClick={() => setShowPrivacy(true)} className="login-legal-link" style={{background:'none',border:'none',padding:0,cursor:'pointer'}}>Términos de Servicio</button>
             {' '}y{' '}
-            <a href="#" className="login-legal-link">Política de Privacidad</a>
+            <button onClick={() => setShowPrivacy(true)} className="login-legal-link" style={{background:'none',border:'none',padding:0,cursor:'pointer'}}>Política de Privacidad</button>
             {' '}de Vibe
           </p>
+          {showPrivacy && <PrivacyPolicy onClose={() => setShowPrivacy(false)} />}
         </div>
 
         {/* Notas musicales dispersas — esquina inferior derecha */}
