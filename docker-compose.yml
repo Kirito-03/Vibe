@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
       POSTGRES_DB: ${DB_NAME:-vibe}
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/scripts/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
@@ -119,6 +119,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
       DB_NAME: ${DB_NAME:-vibe}
       DB_HOST: "127.0.0.1"
+      DB_PORT: "5433"
       CONVERT_URL: "http://127.0.0.1:8000"
       DOWNLOADER_URL: "http://127.0.0.1:8000"
       CONVERT_TIMEOUT_MS: ${CONVERT_TIMEOUT_MS:-20000}
