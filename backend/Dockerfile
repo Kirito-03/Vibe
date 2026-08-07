@@ -9,7 +9,7 @@ COPY tsconfig.json ./
 COPY *.json ./
 COPY src ./src
 
-RUN npx tsc -p tsconfig.json
+RUN ./node_modules/.bin/tsc -p tsconfig.json
 
 FROM node:20-alpine
 
