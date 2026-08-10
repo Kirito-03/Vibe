@@ -441,18 +441,18 @@ return;
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                   {[
-                    { name: 'Reggaeton', color: 'from-[#831843]/80 to-[#4c1d95]/80', img: '/genres/reggaeton.jpg' },
-                    { name: 'Pop', color: 'from-[#9d174d]/80 to-[#5b21b6]/80', img: '/genres/pop.jpg' },
-                    { name: 'Trap', color: 'from-[#312e81]/80 to-[#4c1d95]/80', img: '/genres/trap.jpg' },
-                    { name: 'Electrónica', color: 'from-[#4c1d95]/80 to-[#1e3a8a]/80', img: '/genres/electronica.jpg' },
-                    { name: 'Latin', color: 'from-[#be123c]/80 to-[#831843]/80', img: '/genres/latin.jpg' },
-                    { name: 'Flamenco', color: 'from-[#701a75]/80 to-[#4a044e]/80', img: '/genres/flamenco.jpg' },
-                    { name: 'R&B', color: 'from-[#86198f]/80 to-[#4c1d95]/80', img: '/genres/rb.jpg' },
-                    { name: 'Hip Hop', color: 'from-[#1e3a8a]/80 to-[#312e81]/80', img: '/genres/hiphop.jpg' },
-                    { name: 'Rock', color: 'from-[#581c87]/80 to-[#3b0764]/80', img: '/genres/rock.jpg' },
-                    { name: 'Indie', color: 'from-[#d946ef]/60 to-[#c084fc]/60', img: '/genres/indie.jpg' },
-                    { name: 'Jazz', color: 'from-[#3b0764]/80 to-[#172554]/80', img: '/genres/jazz.jpg' },
-                    { name: 'Podcast', color: 'from-[#86198f]/80 to-[#701a75]/80', img: '/genres/podcast.jpg' }
+                    { name: 'Reggaeton', color: 'from-[#831843]/80 to-[#4c1d95]/80', img: '/genres/reggaeton.jpg?v=2' },
+                    { name: 'Pop', color: 'from-[#9d174d]/80 to-[#5b21b6]/80', img: '/genres/pop.jpg?v=2' },
+                    { name: 'Trap', color: 'from-[#312e81]/80 to-[#4c1d95]/80', img: '/genres/trap.jpg?v=2' },
+                    { name: 'Electrónica', color: 'from-[#4c1d95]/80 to-[#1e3a8a]/80', img: '/genres/electronica.jpg?v=2' },
+                    { name: 'Latin', color: 'from-[#be123c]/80 to-[#831843]/80', img: '/genres/latin.jpg?v=2' },
+                    { name: 'Flamenco', color: 'from-[#701a75]/80 to-[#4a044e]/80', img: '/genres/flamenco.jpg?v=2' },
+                    { name: 'R&B', color: 'from-[#86198f]/80 to-[#4c1d95]/80', img: '/genres/rb.jpg?v=2' },
+                    { name: 'Hip Hop', color: 'from-[#1e3a8a]/80 to-[#312e81]/80', img: '/genres/hiphop.jpg?v=2' },
+                    { name: 'Rock', color: 'from-[#581c87]/80 to-[#3b0764]/80', img: '/genres/rock.jpg?v=2' },
+                    { name: 'Indie', color: 'from-[#d946ef]/60 to-[#c084fc]/60', img: '/genres/indie.jpg?v=2' },
+                    { name: 'Jazz', color: 'from-[#3b0764]/80 to-[#172554]/80', img: '/genres/jazz.jpg?v=2' },
+                    { name: 'Podcast', color: 'from-[#86198f]/80 to-[#701a75]/80', img: '/genres/podcast.jpg?v=2' }
                   ].map((genre) => (
                       <button
                         key={genre.name}

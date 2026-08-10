@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Music2 } from 'lucide-react';
 
 type TrackCoverProps = {
@@ -32,6 +32,11 @@ export const TrackCover = ({ src, videoId, title = '', className }: TrackCoverPr
 
   const [value, setValue] = useState(initialSrc);
   const [idx, setIdx] = useState(0);
+
+  useEffect(() => {
+    setValue(initialSrc);
+    setIdx(0);
+  }, [initialSrc]);
 
   const onError = () => {
     if (idx < fallbacks.length) {
