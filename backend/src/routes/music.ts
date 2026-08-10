@@ -194,6 +194,26 @@ const dedupeAndFilterItems = (
 
   return { items: out, dedupedCount: items.length - out.length, skippedDuplicates };
 };
+
+const cleanTrackTitle = (title: string): string => {
+  if (!title) return '';
+  let t = title;
+  // Remover sufijos comunes de YouTube
+  t = t.replace(/(\(|\[)?\s*(official (music )?video|official audio|lyric video|lyrics|audio oficial|video oficial|video|audio|visualizer)\s*(\)|\])?/gi, '');
+  t = t.replace(/(\(|\[)?\s*(super slowed|slowed|reverb|slowed \+ reverb|extended|sped up|nightcore|ultra slowed)\s*(\)|\])?/gi, '');
+  t = t.replace(/(\(|\[)?\s*(4K|HD|HQ)\s*(\)|\])?/gi, '');
+  t = t.replace(/【.*?】/g, '');
+  // Limpiar guiones o espacios colgantes al final o inicio
+  t = t.replace(/\s*[-|]\s*$/, '');
+  t = t.replace(/^\s*[-|]\s*/, '');
+  // Quitar paréntesis vacíos que hayan quedado (e.g., "Song ()")
+  t = t.replace(/\(\s*\)/g, '');
+  t = t.replace(/\[\s*\]/g, '');
+  // Espacios dobles a simples
+  t = t.replace(/\s{2,}/g, ' ');
+  return t.trim() || title; // Si quedó vacío por error, retorna el original
+};
+
 const isNonMusicTitle = (title: string, uploader?: string) => {
   if (!isLikelyMusicTrack(title, uploader)) return true;
 
@@ -412,7 +432,7 @@ const adaptYouTubeRows = (rows: any[], localKeys: Set<string>, localYoutubeIds: 
     return {
       id: ytId,
       youtube_id: ytId,
-      title: cleanSongTitle(yt.title),
+      title: cleanTrackTitle(yt.title),
       artist: cleanSongTitle(yt.uploader ?? yt.artist ?? 'Internet'),
       uploader: cleanSongTitle(yt.uploader ?? yt.artist ?? 'Internet'),
       duration: parseDurationSeconds(yt.duration_seconds ?? yt.lengthSeconds ?? yt.duration),
@@ -640,7 +660,7 @@ const searchDuckDuckGoForYoutube = async (query: string, limit: number) => {
       rows.push({
         id: ytId,
         youtube_id: ytId,
-        title,
+        title: cleanTrackTitle(title),
         uploader: 'YouTube',
         duration_seconds: null,
         thumbnail_url: `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`,
