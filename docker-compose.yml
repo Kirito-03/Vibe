@@ -145,6 +145,7 @@ services:
     command: ["tunnel", "run"]
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:?TUNNEL_TOKEN is required}
+      TUNNEL_TRANSPORT_PROTOCOL: http2
     extra_hosts:
       - "localhost:host-gateway"
       - "127.0.0.1:host-gateway"
