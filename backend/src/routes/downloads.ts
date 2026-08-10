@@ -288,7 +288,16 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   } else if (Buffer.isBuffer(req.body)) {
     try { finalBody = JSON.parse(req.body.toString('utf8')); } catch(e) {}
   }
-  const { url, mode = 'audio', quality = 'high', youtube_id, title: bodyTitle, uploader: bodyUploader } = finalBody;
+  const { 
+    url, 
+    mode = 'audio', 
+    quality = 'high', 
+    youtube_id, 
+    title: bodyTitle, 
+    uploader: bodyUploader,
+    duration: bodyDuration,
+    thumbnail: bodyThumbnail
+  } = finalBody;
 
   if (!url) {
     return res.status(400).json({ ok: false, code: 'MISSING_TRACK_SOURCE', message: 'Missing youtubeId/sourceId/url' });
@@ -406,9 +415,12 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
       uploader,
     } = dlData || {};
 
-    // Fallback if yt-dlp fails to get title and just returns the youtube id
-    const finalTitle = (title && title !== extractedYoutubeId && title !== filename) ? title : (bodyTitle || title);
+    // Fallback if yt-dlp fails to get title and just returns the youtube id or a generated filename
+    const isWorkerFilename = title && (title.startsWith('youtube_') || title === filename || title === extractedYoutubeId);
+    const finalTitle = (!isWorkerFilename && title) ? title : (bodyTitle || title);
     const finalUploader = (uploader && uploader !== 'Unknown') ? uploader : (bodyUploader || uploader || 'Desconocido');
+    const finalDuration = duration_seconds || bodyDuration || 0;
+    const finalThumbnail = thumbnail_url || bodyThumbnail || null;
 
     const normalizedTitle = String(finalTitle || '').trim();
     const normalizedArtist = String(finalUploader || '').trim();
@@ -450,10 +462,10 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
            url = EXCLUDED.url
          RETURNING *`,
         [
-          normalizedTitle,
-          normalizedArtist || null,
-          duration_seconds || null,
-          thumbnail_url || `https://i.ytimg.com/vi/${extractedYoutubeId}/hqdefault.jpg`,
+          finalTitle || 'Unknown',
+          finalUploader,
+          finalDuration,
+          finalThumbnail || `https://i.ytimg.com/vi/${extractedYoutubeId}/hqdefault.jpg`,
           file_path,
           mode,
           extractedYoutubeId,

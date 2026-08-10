@@ -818,7 +818,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
                 const dlRes = await apiFetch(`/api/downloads`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ url: rec.url, title: rec.title, uploader: rec.uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: rec.youtube_id || rec.id }),
+                  body: JSON.stringify({ url: rec.url, title: rec.title, uploader: rec.uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: rec.youtube_id || rec.id, duration: rec.duration_seconds || rec.duration || 0, thumbnail: rec.thumbnail_url || rec.thumbnail || null }),
                 });
                 const dlData = dlRes.ok ? await dlRes.json().catch(() => null) : null;
                 if (dlData && dlData.id) {
@@ -1009,7 +1009,9 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
                 title: song.title,
                 uploader: song.artist,
                 mode: 'audio',
-                youtube_id: ytId
+                youtube_id: ytId,
+                duration: song.duration_seconds || song.durationSecs || 0,
+                thumbnail: song.image_url || song.imageUrl || null
               })
             });
             const dlData = await dlRes.json().catch(() => null);
@@ -1389,7 +1391,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
                         const dlRes = await apiFetch(`/api/downloads`, {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ url: makeSafeYoutubeWatchUrl(rec.youtube_id || rec.id), title: rec.title, uploader: rec.uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: rec.youtube_id || rec.id }),
+                          body: JSON.stringify({ url: makeSafeYoutubeWatchUrl(rec.youtube_id || rec.id), title: rec.title, uploader: rec.uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: rec.youtube_id || rec.id, duration: rec.duration_seconds || rec.duration || 0, thumbnail: rec.thumbnail_url || rec.thumbnail || null }),
                         });
                         const dlData = dlRes.ok ? await dlRes.json().catch(() => null) : null;
                         if (dlData && dlData.id) {
@@ -1500,7 +1502,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
                         const dlRes = await apiFetch(`/api/downloads`, {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ url: makeSafeYoutubeWatchUrl(rec.youtube_id || rec.id), title: rec.title, uploader: rec.uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: rec.youtube_id || rec.id }),
+                          body: JSON.stringify({ url: makeSafeYoutubeWatchUrl(rec.youtube_id || rec.id), title: rec.title, uploader: rec.uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: rec.youtube_id || rec.id, duration: rec.duration_seconds || rec.duration || 0, thumbnail: rec.thumbnail_url || rec.thumbnail || null }),
                         });
                         if (dlRes.ok) {
                           let dlData = await dlRes.json();
