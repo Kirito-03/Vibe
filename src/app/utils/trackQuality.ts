@@ -11,7 +11,8 @@ export function isLikelyMusicTrack(title: string | undefined | null, artist: str
     'ableton tutorial', 'logic pro tutorial', 'pro tools tutorial', 'cubase tutorial', 
     'mixing tutorial', 'mastering tutorial', 'microphone setup', 'sound test', 
     'demo', 'sample pack', 'type beat', 'free beat', 'unboxing', 'gameplay', 
-    'walkthrough', 'chapter', 'full episode', 'vlog', 'luna -', 'studio mix setup guide'
+    'walkthrough', 'chapter', 'full episode', 'vlog', 'luna -', 'studio mix setup guide',
+    'meme', 'shitpost', 'funny', 'broma', 'clip', 'shorts', 'tiktok compilation', 'momento'
   ];
 
   for (const k of toxicKeywords) {
