@@ -48,15 +48,16 @@ export function Player({
     toggleShuffle: onToggleShuffle,
     cycleRepeat: onCycleRepeat,
     toggleLike,
+    duration: realDuration,
   } = usePlayback();
 
   const isLiked = !!currentTrack && favorites.has(getTrackKey(currentTrack));
   const [prevVolume, setPrevVolume] = useState(volume);
-  const img = song?.imageUrl ?? song?.image_url ?? DEFAULT_IMG;
+  const img = song?.imageUrl ?? song?.image_url ?? '';
   const title  = song?.title ?? 'Elige una canción';
   const artist = song?.artist ?? song?.artist_name ?? '';
   const videoId = song?.youtube_id || (currentTrack?.source === 'youtube' ? currentTrack?.sourceId : null);
-  let durS = song?.durationSecs ?? song?.duration_seconds ?? 0;
+  let durS = realDuration > 0 ? realDuration : (song?.durationSecs ?? song?.duration_seconds ?? 0);
   if (!durS && typeof song?.duration === 'number') durS = song.duration;
   let dur = '0:00';
   if (typeof song?.duration === 'string' && song.duration.includes(':')) {

@@ -64,6 +64,7 @@ export function NowPlaying({
     playNextFromQueueIndex: onPlayNext,
     sleepTimerRemainingSec,
     setSleepTimer: onSetSleepTimerMinutes,
+    duration: realDuration,
     toggleLike,
   } = usePlayback();
 
@@ -210,7 +211,7 @@ export function NowPlaying({
     setShowQueue(false);
   };
 
-  let durSecs = song?.duration_seconds ?? song?.durationSecs ?? 0;
+  let durSecs = realDuration > 0 ? realDuration : (song?.duration_seconds ?? song?.durationSecs ?? 0);
   if (!durSecs && typeof song?.duration === 'number') durSecs = song.duration;
   const currentSecs = (progress / 100) * durSecs;
   const elapsed = song ? formatSecs(durSecs, progress) : '0:00';
