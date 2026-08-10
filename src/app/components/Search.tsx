@@ -453,28 +453,33 @@ return;
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                   {[
-                    { name: 'Reggaeton', color: 'from-[#831843]/80 to-[#4c1d95]/80', img: 'https://images.unsplash.com/photo-1493225457124-a1a2a5f5f924?w=500&q=80' },
-                    { name: 'Pop', color: 'from-[#9d174d]/80 to-[#5b21b6]/80', img: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80' },
-                    { name: 'Trap', color: 'from-[#312e81]/80 to-[#4c1d95]/80', img: 'https://images.unsplash.com/photo-1621532813735-e10b14bdf34a?w=500&q=80' },
-                    { name: 'Electrónica', color: 'from-[#4c1d95]/80 to-[#1e3a8a]/80', img: 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=500&q=80' },
-                    { name: 'Latin', color: 'from-[#be123c]/80 to-[#831843]/80', img: 'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=500&q=80' },
-                    { name: 'Flamenco', color: 'from-[#701a75]/80 to-[#4a044e]/80', img: 'https://images.unsplash.com/photo-1533174000255-598dc4b16278?w=500&q=80' },
-                    { name: 'R&B', color: 'from-[#86198f]/80 to-[#4c1d95]/80', img: 'https://images.unsplash.com/photo-1493225457124-a1a2a5f5f924?w=500&q=80' },
-                    { name: 'Hip Hop', color: 'from-[#1e3a8a]/80 to-[#312e81]/80', img: 'https://images.unsplash.com/photo-1601643157091-ce5c665179ab?w=500&q=80' },
-                    { name: 'Rock', color: 'from-[#581c87]/80 to-[#3b0764]/80', img: 'https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=500&q=80' },
-                    { name: 'Indie', color: 'from-[#d946ef]/60 to-[#c084fc]/60', img: 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=500&q=80' },
-                    { name: 'Jazz', color: 'from-[#3b0764]/80 to-[#172554]/80', img: 'https://images.unsplash.com/photo-1511192336575-5a79af67a629?w=500&q=80' },
-                    { name: 'Podcast', color: 'from-[#86198f]/80 to-[#701a75]/80', img: 'https://images.unsplash.com/photo-1593697972673-db192df63a23?w=500&q=80' }
-                    ].map((genre) => (
+                    { name: 'Reggaeton', color: 'from-[#831843]/80 to-[#4c1d95]/80', img: '/genres/reggaeton.jpg' },
+                    { name: 'Pop', color: 'from-[#9d174d]/80 to-[#5b21b6]/80', img: '/genres/pop.jpg' },
+                    { name: 'Trap', color: 'from-[#312e81]/80 to-[#4c1d95]/80', img: '/genres/trap.jpg' },
+                    { name: 'Electrónica', color: 'from-[#4c1d95]/80 to-[#1e3a8a]/80', img: '/genres/electronica.jpg' },
+                    { name: 'Latin', color: 'from-[#be123c]/80 to-[#831843]/80', img: '/genres/latin.jpg' },
+                    { name: 'Flamenco', color: 'from-[#701a75]/80 to-[#4a044e]/80', img: '/genres/flamenco.jpg' },
+                    { name: 'R&B', color: 'from-[#86198f]/80 to-[#4c1d95]/80', img: '/genres/rb.jpg' },
+                    { name: 'Hip Hop', color: 'from-[#1e3a8a]/80 to-[#312e81]/80', img: '/genres/hiphop.jpg' },
+                    { name: 'Rock', color: 'from-[#581c87]/80 to-[#3b0764]/80', img: '/genres/rock.jpg' },
+                    { name: 'Indie', color: 'from-[#d946ef]/60 to-[#c084fc]/60', img: '/genres/indie.jpg' },
+                    { name: 'Jazz', color: 'from-[#3b0764]/80 to-[#172554]/80', img: '/genres/jazz.jpg' },
+                    { name: 'Podcast', color: 'from-[#86198f]/80 to-[#701a75]/80', img: '/genres/podcast.jpg' }
+                  ].map((genre) => (
                       <button
                         key={genre.name}
                         onClick={() => {
-                          setSearchQuery(genre.name);
+                          setSearchQuery(genre.name + ' cancion');
                           upsertRecent(genre.name).catch(() => {});
                         }}
                         className={`relative h-28 rounded-none overflow-hidden group bg-gradient-to-br ${genre.color}`}
                       >
-                        <img src={genre.img} alt={genre.name} className="absolute inset-0 w-full h-full object-cover opacity-40 group-hover:scale-110 transition-transform duration-500" />
+                        <img 
+                          src={genre.img} 
+                          alt={genre.name} 
+                          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                          className="absolute inset-0 w-full h-full object-cover opacity-40 group-hover:scale-110 transition-transform duration-500" 
+                        />
                         <div className="absolute inset-0 bg-black/10 group-hover:bg-black/0 transition-colors" />
                         <span className="absolute bottom-3 left-4 text-sm font-bold text-white shadow-sm z-10">{genre.name}</span>
                       </button>
