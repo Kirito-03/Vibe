@@ -373,11 +373,19 @@ return;
                 <p className="text-zinc-500 text-lg font-medium animate-pulse">Explorando el catálogo...</p>
               </div>
             ) : searchResults.length > 0 ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-6">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-5 sm:gap-6">
                 {searchResults.map((d) => {
+                  const ytId = d.youtube_id || (d.source === 'youtube' ? String(d.id) : null) || null;
+                  const imgSrc = (d as any).thumbnail_url || (d as any).image_url || (d as any).imageUrl || '';
+                  const artistLabel =
+                    d.uploader && d.uploader !== 'YouTube' && d.uploader !== 'YouTube Music'
+                      ? d.uploader
+                      : d.artist && d.artist !== 'YouTube' && d.artist !== 'YouTube Music'
+                      ? d.artist
+                      : 'Internet';
                   const song = downloadToSong(d as any);
                   const isActive = currentSong?.id === song.id || (currentSong as any)?.youtube_id === d.youtube_id;
-                  const songKey = String((song as any).youtube_id || song.id);
+                  const songKey = String(ytId || song.id);
                   const isDownloading = preparingTrackKey === songKey;
                   return (
                     <div
@@ -385,15 +393,18 @@ return;
                       onClick={() => handleResultClick(d)}
                       className="cursor-pointer group flex flex-col"
                     >
-                      <div className={`relative aspect-square mb-3 overflow-hidden shadow-lg ${isActive ? 'ring-2 ring-violet-500 ring-offset-2 ring-offset-black rounded-none' : ''}`}>
+                      <div className={`relative aspect-square mb-3 overflow-hidden shadow-lg ${
+                        isActive ? 'ring-2 ring-violet-500 ring-offset-2 ring-offset-black' : ''
+                      }`}>
                         <TrackCover
-                          src={song.imageUrl || song.image_url}
-                          videoId={d.youtube_id || (d.source === 'youtube' ? String(d.id) : null)}
+                          src={imgSrc}
+                          videoId={ytId}
                           title={d.title}
                           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                         />
-                        <div className={`absolute inset-0 bg-black/40 flex items-center justify-center transition-opacity duration-300
-                          ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                        <div className={`absolute inset-0 bg-black/40 flex items-center justify-center transition-opacity duration-300 ${
+                          isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                        }`}>
                           {isDownloading ? (
                             <Loader2 className="w-8 h-8 text-white animate-spin" />
                           ) : isActive && isPlaying ? (
@@ -413,12 +424,10 @@ return;
                           </div>
                         )}
                       </div>
-                      <h4 className={`font-bold text-sm truncate ${isActive ? 'text-violet-400' : 'text-white group-hover:text-violet-200 transition-colors'}`}>
-                        {d.title}
-                      </h4>
-                      <p className="text-zinc-400 text-xs truncate mt-1">
-                        {d.source === 'youtube' ? (d.uploader !== 'YouTube' && d.uploader !== 'YouTube Music' ? d.uploader : 'Internet') : (d.artist || 'Internet')}
-                      </p>
+                      <h4 className={`font-bold text-sm truncate ${
+                        isActive ? 'text-violet-400' : 'text-white group-hover:text-violet-200 transition-colors'
+                      }`}>{d.title}</h4>
+                      <p className="text-zinc-400 text-xs truncate mt-1">{artistLabel}</p>
                     </div>
                   );
                 })}
@@ -441,18 +450,17 @@ return;
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                   {[
-                    { name: 'Reggaeton', color: 'from-[#831843]/80 to-[#4c1d95]/80', img: '/genres/reggaeton.jpg?v=2' },
-                    { name: 'Pop', color: 'from-[#9d174d]/80 to-[#5b21b6]/80', img: '/genres/pop.jpg?v=2' },
-                    { name: 'Trap', color: 'from-[#312e81]/80 to-[#4c1d95]/80', img: '/genres/trap.jpg?v=2' },
-                    { name: 'Electrónica', color: 'from-[#4c1d95]/80 to-[#1e3a8a]/80', img: '/genres/electronica.jpg?v=2' },
-                    { name: 'Latin', color: 'from-[#be123c]/80 to-[#831843]/80', img: '/genres/latin.jpg?v=2' },
-                    { name: 'Flamenco', color: 'from-[#701a75]/80 to-[#4a044e]/80', img: '/genres/flamenco.jpg?v=2' },
-                    { name: 'R&B', color: 'from-[#86198f]/80 to-[#4c1d95]/80', img: '/genres/rb.jpg?v=2' },
-                    { name: 'Hip Hop', color: 'from-[#1e3a8a]/80 to-[#312e81]/80', img: '/genres/hiphop.jpg?v=2' },
-                    { name: 'Rock', color: 'from-[#581c87]/80 to-[#3b0764]/80', img: '/genres/rock.jpg?v=2' },
-                    { name: 'Indie', color: 'from-[#d946ef]/60 to-[#c084fc]/60', img: '/genres/indie.jpg?v=2' },
-                    { name: 'Jazz', color: 'from-[#3b0764]/80 to-[#172554]/80', img: '/genres/jazz.jpg?v=2' },
-                    { name: 'Podcast', color: 'from-[#86198f]/80 to-[#701a75]/80', img: '/genres/podcast.jpg?v=2' }
+                    { name: 'Reggaeton', color: 'from-[#831843] to-[#4c1d95]', img: '/genres/reggaeton.jpg' },
+                    { name: 'Pop', color: 'from-[#9d174d] to-[#5b21b6]', img: '/genres/pop.jpg' },
+                    { name: 'Trap', color: 'from-[#312e81] to-[#4c1d95]', img: '/genres/trap.jpg' },
+                    { name: 'Electrónica', color: 'from-[#4c1d95] to-[#1e3a8a]', img: '/genres/electronica.jpg' },
+                    { name: 'Latin', color: 'from-[#be123c] to-[#831843]', img: '/genres/latin.jpg' },
+                    { name: 'Flamenco', color: 'from-[#701a75] to-[#4a044e]', img: '/genres/flamenco.jpg' },
+                    { name: 'R&B', color: 'from-[#86198f] to-[#4c1d95]', img: '/genres/rb.jpg' },
+                    { name: 'Hip Hop', color: 'from-[#1e3a8a] to-[#312e81]', img: '/genres/hiphop.jpg' },
+                    { name: 'Rock', color: 'from-[#581c87] to-[#3b0764]', img: '/genres/rock.jpg' },
+                    { name: 'Indie', color: 'from-[#d946ef] to-[#c084fc]', img: '/genres/indie.jpg' },
+                    { name: 'Jazz', color: 'from-[#3b0764] to-[#172554]', img: '/genres/jazz.jpg' },
                   ].map((genre) => (
                       <button
                         key={genre.name}
@@ -460,16 +468,15 @@ return;
                           setSearchQuery(genre.name + ' cancion');
                           upsertRecent(genre.name).catch(() => {});
                         }}
-                        className={`relative h-28 rounded-none overflow-hidden group bg-gradient-to-br ${genre.color}`}
+                        className={`relative h-32 overflow-hidden group bg-gradient-to-br ${genre.color}`}
                       >
                         <img 
                           src={genre.img} 
                           alt={genre.name} 
-                          onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                          className="absolute inset-0 w-full h-full object-cover opacity-40 group-hover:scale-110 transition-transform duration-500" 
+                          className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-80 group-hover:scale-110 transition-all duration-500" 
                         />
-                        <div className="absolute inset-0 bg-black/10 group-hover:bg-black/0 transition-colors" />
-                        <span className="absolute bottom-3 left-4 text-sm font-bold text-white shadow-sm z-10">{genre.name}</span>
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+                        <span className="absolute bottom-3 left-4 text-base font-bold text-white drop-shadow-lg z-10">{genre.name}</span>
                       </button>
                     ))}
                 </div>

@@ -597,21 +597,26 @@ export function Home({
             className="flex gap-4 overflow-x-auto scroll-smooth no-scrollbar pb-2"
             style={{ scrollbarWidth: 'none' }}
           >
-            {randomPicks.slice(0, 20).map((d: any) => {
+            {randomPicks.slice(0, 15).map((d: any) => {
+              const ytId = d.youtube_id || String(d.id || '');
+              const imgSrc = d.thumbnail_url || d.image_url || d.imageUrl || '';
+              const artistName = d.artist && d.artist !== 'YouTube' && d.artist !== 'YouTube Music' && d.artist !== 'Internet'
+                ? d.artist
+                : (d.uploader && d.uploader !== 'YouTube' && d.uploader !== 'YouTube Music' ? d.uploader : null);
               const song = {
-                id: d.id, title: d.title, artist: d.artist || 'Internet',
-                imageUrl: d.thumbnail_url || '', source: 'youtube', youtube_id: d.youtube_id || d.id
+                id: ytId, title: d.title, artist: artistName || 'Internet',
+                imageUrl: imgSrc, image_url: imgSrc, source: 'youtube', youtube_id: ytId
               } as Song;
               return (
-                <div key={d.id} onClick={() => handleResultClick(d, song, false)} className="w-32 sm:w-40 md:w-44 flex-shrink-0 cursor-pointer group">
-                  <div className="aspect-square relative overflow-hidden shadow-lg">
-                    <img src={song.imageUrl} alt={song.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
+                <div key={d.id || ytId} onClick={() => handleResultClick(d, song, false)} className="w-36 sm:w-44 md:w-48 flex-shrink-0 cursor-pointer group">
+                  <div className="aspect-square relative overflow-hidden shadow-lg mb-3">
+                    <TrackCover src={imgSrc} videoId={ytId} title={song.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                         <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center"><Play className="w-5 h-5 text-white ml-1" fill="currentColor"/></div>
                     </div>
                   </div>
-                  <h4 className="text-white font-bold text-sm truncate mt-3">{song.title}</h4>
-                  <p className="text-zinc-400 text-xs truncate">{song.artist}</p>
+                  <h4 className="text-white font-bold text-sm truncate">{song.title}</h4>
+                  <p className="text-zinc-400 text-xs truncate mt-0.5">{song.artist}</p>
                 </div>
               );
             })}
@@ -632,21 +637,26 @@ export function Home({
             className="flex gap-4 overflow-x-auto scroll-smooth no-scrollbar pb-2"
             style={{ scrollbarWidth: 'none' }}
           >
-            {recommendations.slice(0, 20).map((d: any) => {
+            {recommendations.slice(0, 15).map((d: any) => {
+              const ytId = d.youtube_id || String(d.id || '');
+              const imgSrc = d.thumbnail_url || d.image_url || d.imageUrl || '';
+              const artistName = d.artist && d.artist !== 'YouTube' && d.artist !== 'YouTube Music' && d.artist !== 'Internet'
+                ? d.artist
+                : (d.uploader && d.uploader !== 'YouTube' && d.uploader !== 'YouTube Music' ? d.uploader : null);
               const song = {
-                id: d.id, title: d.title, artist: d.artist || 'Internet',
-                imageUrl: d.thumbnail_url || '', source: 'youtube', youtube_id: d.youtube_id || d.id
+                id: ytId, title: d.title, artist: artistName || 'Internet',
+                imageUrl: imgSrc, image_url: imgSrc, source: 'youtube', youtube_id: ytId
               } as Song;
               return (
-                <div key={d.id} onClick={() => handleResultClick(d, song, false)} className="w-32 sm:w-40 md:w-44 flex-shrink-0 cursor-pointer group">
+                <div key={d.id || ytId} onClick={() => handleResultClick(d, song, false)} className="w-36 sm:w-44 md:w-48 flex-shrink-0 cursor-pointer group">
                   <div className="relative aspect-square mb-3 overflow-hidden shadow-lg">
-                    <img src={song.imageUrl} alt={song.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                    <TrackCover src={imgSrc} videoId={ytId} title={song.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                         <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center"><Play className="w-5 h-5 text-white ml-1" fill="currentColor"/></div>
                     </div>
                   </div>
                   <h4 className="text-white font-bold text-sm truncate">{song.title}</h4>
-                  <p className="text-zinc-400 text-xs truncate">{song.artist}</p>
+                  <p className="text-zinc-400 text-xs truncate mt-0.5">{song.artist}</p>
                 </div>
               );
             })}
