@@ -228,11 +228,15 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
       if (k) console.log(`[storage] key=${getUserStorageKey('vns_lastPlayed', user?.uid)}`);
       if (k) {
         const data = safeJsonParse<PersistedPlaybackState>(localStorage.getItem(k));
-        if (data?.currentTrack && (!(data.currentTrack as any).youtube_id && !data.currentTrack.sourceId && !(data.currentTrack as any).url)) {
-           // Si no tiene fuente válida, mejor limpiar este state corrupto en vez de arrastrarlo.
-           console.log('[playback/rehydrate] clearing stale local track', data.currentTrack);
-           localStorage.removeItem(k);
-           return null;
+        if (data?.currentTrack) {
+          const hasInvalidSource = (!(data.currentTrack as any).youtube_id && !data.currentTrack.sourceId && !(data.currentTrack as any).url);
+          const hasBuggedTitle = typeof data.currentTrack.title === 'string' && data.currentTrack.title.startsWith('youtube_');
+          
+          if (hasInvalidSource || hasBuggedTitle) {
+             console.log('[playback/rehydrate] clearing stale/bugged local track', data.currentTrack);
+             localStorage.removeItem(k);
+             return null;
+          }
         }
         return data;
       }
