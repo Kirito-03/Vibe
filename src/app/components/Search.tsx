@@ -373,7 +373,7 @@ return;
                 <p className="text-zinc-500 text-lg font-medium animate-pulse">Explorando el catálogo...</p>
               </div>
             ) : searchResults.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-6">
                 {searchResults.map((d) => {
                   const song = downloadToSong(d as any);
                   const isActive = currentSong?.id === song.id || (currentSong as any)?.youtube_id === d.youtube_id;
@@ -383,54 +383,42 @@ return;
                     <div
                       key={`${d.source ?? 'local'}-${d.id}`}
                       onClick={() => handleResultClick(d)}
-                      className={`group relative flex items-center gap-4 p-3 rounded-2xl cursor-pointer transition-all duration-300
-                        ${isActive ? 'bg-violet-500/20 shadow-[0_8px_30px_rgba(139,92,246,0.15)] border border-violet-500/30' : 'bg-white/[0.03] hover:bg-white/[0.08] border border-transparent hover:border-white/10'}`}
+                      className="cursor-pointer group flex flex-col"
                     >
-                      <div className={`relative w-16 h-16 rounded-xl overflow-hidden bg-zinc-800 flex-shrink-0 shadow-lg ${isActive ? 'ring-2 ring-violet-500 ring-offset-2 ring-offset-black' : ''}`}>
+                      <div className={`relative aspect-square mb-3 overflow-hidden shadow-lg ${isActive ? 'ring-2 ring-violet-500 ring-offset-2 ring-offset-black rounded-none' : ''}`}>
                         <TrackCover
                           src={song.imageUrl || song.image_url}
                           videoId={d.youtube_id || (d.source === 'youtube' ? String(d.id) : null)}
                           title={d.title}
-                          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                         />
-                        <div className={`absolute inset-0 bg-black/50 backdrop-blur-[2px] flex items-center justify-center transition-all duration-300
+                        <div className={`absolute inset-0 bg-black/40 flex items-center justify-center transition-opacity duration-300
                           ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
                           {isDownloading ? (
-                            <Loader2 className="w-7 h-7 text-white animate-spin" />
+                            <Loader2 className="w-8 h-8 text-white animate-spin" />
                           ) : isActive && isPlaying ? (
-                            <Pause className="w-7 h-7 text-white" fill="currentColor" />
+                            <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center"><Pause className="w-5 h-5 text-white" fill="currentColor" /></div>
                           ) : (
-                            <Play className="w-7 h-7 text-white ml-1" fill="currentColor" />
+                            <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center"><Play className="w-5 h-5 text-white ml-1" fill="currentColor" /></div>
                           )}
                         </div>
-                      </div>
-                      
-                      <div className="flex-1 min-w-0 pr-2">
-                        <p className={`text-base font-bold truncate mb-1 ${isActive ? 'text-violet-400' : 'text-white group-hover:text-violet-200 transition-colors'}`}>
-                          {d.title}
-                        </p>
-                        <div className="flex items-center text-sm gap-2">
-                          <span className="text-zinc-400 truncate max-w-[120px]">
-                            {d.source === 'youtube' ? (d.uploader !== 'YouTube' && d.uploader !== 'YouTube Music' ? d.uploader : 'Internet') : (d.artist || 'Internet')}
-                          </span>
-                          <span className="w-1 h-1 rounded-full bg-zinc-600"></span>
-                          <span className="text-zinc-500 tabular-nums font-medium">
-                            {d.duration_seconds
-                              ? `${Math.floor(d.duration_seconds / 60)}:${(d.duration_seconds % 60).toString().padStart(2, '0')}`
-                              : '--:--'
-                            }
-                          </span>
+                        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <TrackFeedbackMenu track={d} />
                         </div>
-                      </div>
-                      
-                      <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2">
-                        <TrackFeedbackMenu track={d} />
                         {d.source === 'youtube' && !isActive && !isDownloading && (
-                          <div className="bg-black/60 backdrop-blur-sm rounded-full p-1.5 border border-white/10 text-violet-400">
-                            <DownloadIcon className="w-3.5 h-3.5" />
+                          <div className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="bg-black/60 backdrop-blur-sm rounded-full p-1.5 border border-white/10 text-violet-400">
+                              <DownloadIcon className="w-4 h-4" />
+                            </div>
                           </div>
                         )}
                       </div>
+                      <h4 className={`font-bold text-sm truncate ${isActive ? 'text-violet-400' : 'text-white group-hover:text-violet-200 transition-colors'}`}>
+                        {d.title}
+                      </h4>
+                      <p className="text-zinc-400 text-xs truncate mt-1">
+                        {d.source === 'youtube' ? (d.uploader !== 'YouTube' && d.uploader !== 'YouTube Music' ? d.uploader : 'Internet') : (d.artist || 'Internet')}
+                      </p>
                     </div>
                   );
                 })}
