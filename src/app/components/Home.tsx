@@ -208,40 +208,76 @@ export function Home({
         const songs = Array.from(uniqueSongs.values()).filter((s) => Boolean(s.title) && Boolean(s.file_url));
         home.setRecentTracks(songs.slice(0, 12)); // Limit to 12 for UI display
 
-        // -- Personalizar sugerencias basadas en el historial
-        let seedForYou = activePill !== 'Todo' ? `${activePill} music official` : 'top hits 2026';
-        let seedRecs = activePill !== 'Todo' ? `${activePill} trending` : 'tendencias musicales 2026';
-        
-        if (activePill === 'Todo' && songs.length > 0) {
+        // -- Mapa de artistas representativos por género para queries específicas
+        const pillSeedMap: Record<string, { forYou: string; discover: string }> = {
+          'Chill': {
+            forYou: 'ed sheeran acoustic official audio',
+            discover: 'billie eilish ocean eyes official audio',
+          },
+          'Workout': {
+            forYou: 'eminem without me official audio',
+            discover: 'eye of the tiger survivor official audio',
+          },
+          'Fiesta': {
+            forYou: 'j balvin mi gente official audio',
+            discover: 'daddy yankee gasolina official audio',
+          },
+          'Romántico': {
+            forYou: 'romeo santos propuesta indecente official audio',
+            discover: 'marc anthony vivir mi vida official audio',
+          },
+          'Focus': {
+            forYou: 'hans zimmer time inception official audio',
+            discover: 'lofi hip hop study beats official audio',
+          },
+          'Rap': {
+            forYou: 'drake god plan official audio',
+            discover: 'kendrick lamar humble official audio',
+          },
+          'Pop': {
+            forYou: 'ariana grande thank u next official audio',
+            discover: 'dua lipa levitating official audio',
+          },
+        };
+
+        // Seeds por defecto sin historial (basados en artistas reales, no en géneros genéricos)
+        let seedForYou = 'karol g bichota official audio';
+        let seedRecs = 'bad bunny un verano sin ti official audio';
+
+        if (activePill !== 'Todo' && pillSeedMap[activePill]) {
+          seedForYou = pillSeedMap[activePill].forYou;
+          seedRecs = pillSeedMap[activePill].discover;
+        } else if (activePill === 'Todo' && songs.length > 0) {
           const artists = songs.map(s => s.artist).filter(a => a && a !== 'Internet' && a !== 'Desconocido' && a !== 'YouTube');
-          const cleanTitles = songs.map(s => s.title.split('-')[0].split('(')[0].trim());
+          const cleanTitles = songs.map(s => s.title.split('-')[0].split('(')[0].trim()).filter(Boolean);
           
           if (artists.length > 0) {
             const uniqueArtists = Array.from(new Set(artists));
-            seedForYou = `${uniqueArtists.slice(0, 2).join(' ')} mejores canciones official`;
-            seedRecs = `canciones similares a ${uniqueArtists[0]} y ${cleanTitles[0]}`;
+            // Queries con nombres de artistas reales generan resultados de canciones individuales, no compilaciones
+            seedForYou = `${uniqueArtists[0]} official audio`;
+            seedRecs = uniqueArtists.length > 1
+              ? `${uniqueArtists[1]} official audio`
+              : (cleanTitles[0] ? `${cleanTitles[0]} official audio` : seedRecs);
           } else if (cleanTitles.length > 0) {
             seedForYou = `${cleanTitles[0]} official audio`;
-            seedRecs = `${cleanTitles[0]} musica parecida`;
+            seedRecs = cleanTitles.length > 1 ? `${cleanTitles[1]} official audio` : seedRecs;
           }
         }
 
         const fallbackForYouSeeds = [
           'karol g official audio',
-          'anuel aa official audio',
           'bad bunny official audio',
-          'anime opening song',
-          'lofi beats',
-          'reggaeton',
+          'anuel aa official audio',
+          'peso pluma official audio',
+          'myke towers official audio',
         ];
 
         const fallbackDiscoverSeeds = [
-          'new music',
-          'latin hits',
-          'anime music',
-          'trending music',
-          'pop latino',
-          'openings anime',
+          'j balvin official audio',
+          'maluma official audio',
+          'shakira official audio',
+          'ozuna official audio',
+          'rauw alejandro official audio',
         ];
 
         const fetchItemsWithTimeout = async <T,>(path: string, timeoutMs = 15000) => {
