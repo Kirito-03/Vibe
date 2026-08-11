@@ -125,6 +125,8 @@ export const AppShell = ({ user, onLogout, onProfileUpdate }: AppShellProps) => 
     setCurrentView(view);
     if (view !== 'playlist') setSelectedPlaylist(null);
     if (view === 'library') setLibraryTab('playlists');
+    // Limpiar búsqueda al salir del buscador
+    if (view !== 'search') setGlobalSearchQuery('');
     setViewHistory((prev) => {
       const newHist = prev.slice(0, historyIndex + 1);
       newHist.push(view);

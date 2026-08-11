@@ -214,41 +214,82 @@ const cleanTrackTitle = (title: string): string => {
   return t.trim() || title; // Si quedó vacío por error, retorna el original
 };
 
-const isNonMusicTitle = (title: string, uploader?: string) => {
+const isNonMusicTitle = (title: string, uploader?: string): boolean => {
   if (!isLikelyMusicTrack(title, uploader)) return true;
 
   const t = normalizeText(title);
   const u = normalizeText(uploader);
   if (!t) return true;
+
+  // Shorts
   if (/(^|\s)#?shorts(\s|$)/.test(t) || /(^|\s)#?shorts(\s|$)/.test(u)) return true;
-  
-  // Términos estrictamente prohibidos (películas, tutoriales, contenido hablado, anime episodes, etc.)
-  const filterRegex = /(^|\s)(tutorial|tutoriales|how to|curso|clase|lesson|gu[ií]a|review|an[áa]lisis|reaction|reacci[oó]n|gameplay|trailer|entrevista|interview|podcast|episode|episodio|ep\.|ep\s*#|cap[ií]tulo|capitulo|live|en vivo|directo|conferencia|stream|walkthrough|speedrun|vlog|pelicula|película|completa|full movie|movie|instagram reels|reels|tiktok|sonidos de reels|troll|trolleo|broma|prank|chiste|humor|risa|meme|parodia|shitpost|whatsapp|chat|reto|challenge|short|shorts|edit|edits|flp|fl studio|type beat|remake|historia|historias|history|responde|respond|explicaci[oó]n|analiza|tiradera|noticia|news|chisme|documentary|documental|biograf[ií]a|mensaje|mensajes|escena|scene|doblaje|temporada|season|clip|doblado|subtitulado|latino|español latino|castellano|te lo resumo|resumen|netflix|hbo|disney|prime video|cine|movies|peliculas|películas|dragon ball|naruto|one piece|surgimento|parte|part|pt\.|roblox|codes|gacha|fnf|friday night funkin|minecraft|ids|id|spotify|hits|compilation|mashup)(\s|$)/;
-  
-  if (filterRegex.test(t) || filterRegex.test(u)) return true;
-  if (t.includes('roblox') || t.includes('audio codes')) return true;
-  if (t.includes('in spotify') || t.includes('tiktok version') || t.includes('tiktok remix')) return true;
-  
-  // Canales que usualmente suben películas o cosas no musicales
-  const badChannels = ['netflix', 'hbo', 'disney', 'prime video', 'cine', 'movies', 'clips', 'televisa', 'tv azteca', 'caracol', 'rcn', 'noticias', 'news', 'crunchyroll'];
+
+  // ── 1. Palabras exactas bloqueadas en título ──────────────────────────────
+  const titleBlocklist = [
+    // Compilaciones / listas
+    'megamix', 'mashup', 'playlist', 'compilation', 'recopilacion', 'recopilación',
+    'coleccion', 'colección', 'enganchados', 'enganchado', 'canciones de',
+    // Tops y rankings
+    'mejores canciones', 'mejores exitos', 'mejores éxitos', 'lo mas escuchado',
+    'lo más escuchado', 'más escuchadas', 'mas escuchadas', 'canciones mas',
+    'canciones más', 'novedades', 'éxitos', 'exitos', 'hits',
+    // Temporada / verano / disco
+    'verano', 'summer', 'navidad', 'navideñas', 'navideño', 'fiesta mix',
+    'discoteca', 'dj set', 'dj mix', 'noche de',
+    // Podcast / show / radio
+    'podcast', 'radio show', 'el show',
+    // Tutoriales / gaming
+    'tutorial', 'gameplay', 'walkthrough', 'vlog',
+    'roblox', 'minecraft', 'fortnite', 'gacha', 'fnf', 'audio codes',
+    // Karaoke / distorsionados
+    'karaoke', '8d audio', '8d music',
+    // Colecciones anime / OST
+    'openings anime', 'endings anime', 'ost collection',
+    'musica de', 'música de', 'canciones para',
+    // YouTube / streaming spam
+    'youtube', 'spotify playlist', 'apple music',
+    // Noticias / chisme
+    'noticias', 'chisme', 'tiradera',
+    // Meditación / chill mal etiquetado
+    'meditacion', 'meditación', 'relax mix', 'spa music',
+    // Año + contexto de ranking
+    'musica 2024', 'musica 2025', 'musica 2026', 'música 2024', 'música 2025', 'música 2026',
+  ];
+  for (const kw of titleBlocklist) {
+    if (t.includes(kw)) return true;
+  }
+
+  // ── 2. Regex patterns en título ──────────────────────────────────────────
+  const titleRegexes = [
+    /\btop\s+\d+\b/,                             // "top 20 canciones"
+    /\d+\s+(canciones|songs|tracks|temas)\b/,    // "20 canciones"
+    /mejor(es)?\s+(de|del|para)/,                // "mejores de"
+    /\bvol\.?\s*\d+\b/i,                         // "Vol 2"
+    /mix\s*(de|del|verano|2024|2025|2026)/i,     // "Mix 2026"
+    /\d{4}\s*(megamix|mix|hits|éxitos|exitos)/,  // "2026 hits"
+    /(éxitos|exitos|hits)\s*\d{4}/,              // "hits 2026"
+    /lo\s+m[aá]s\s+(escuchado|popular|visto)/,
+    /(mejores|top)\s+(canciones|songs)\s+de/,
+    /en\s+(spotify|apple\s+music|tidal)/i,
+    /\bmix\b/i,                                   // cualquier "mix"
+  ];
+  for (const re of titleRegexes) {
+    if (re.test(t)) return true;
+  }
+
+  // ── 3. Canales / uploaders malos ─────────────────────────────────────────
+  const badChannels = [
+    'netflix', 'hbo', 'disney', 'prime video', 'cine', 'movies', 'clips', 'televisa',
+    'tv azteca', 'caracol', 'rcn', 'noticias', 'news', 'crunchyroll',
+    'wowquepasa', 'pareciz', 'dj arbaiza', 'dj bomba', 'dj inot',
+    'vabo music', 'movimiento fresco', 'latin hype', 'latinhype',
+  ];
   if (u && badChannels.some(bc => u.includes(bc))) return true;
 
-  return t.includes('karaoke') || 
-         t.includes('8d') || 
-         /(^|\s)mix(\s|$)/.test(t) || 
-         t.includes('megamix') || 
-         t.includes('playlist') || 
-         t.includes('top') || 
-         t.includes('mejores') || 
-         t.includes('éxitos') || 
-         t.includes('exitos') || 
-         t.includes('recopilación') ||
-         t.includes('recopilacion') ||
-         t.includes('colección') ||
-         t.includes('coleccion') ||
-         t.includes('canciones de') ||
-         t.includes('enganchados') ||
-         t.includes('youtube');
+  // ── 4. Título excesivamente largo (listas y compilaciones) ───────────────
+  if (title.length > 110) return true;
+
+  return false;
 };
 const parseDurationSeconds = (value: unknown): number => {
   const n = Number(value);
