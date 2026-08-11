@@ -125,6 +125,7 @@ type PlaybackContextValue = {
   preparingTrackKey: string | null;
   playingTrackKey: string | null;
   playbackErrorTrackKey: string | null;
+  upcomingTracks: Song[];  // Próximas canciones predichas por autoplay
 
   playSong: (song: Song, playlist?: Playlist, isCrossfade?: boolean) => void;
   playTrack: (track: Track, opts?: { queue?: Track[] }) => void;
@@ -294,9 +295,23 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   const repairingRef = useRef(false);
   const expandingQueueRef = useRef(false);
   const bufferDoneRef = useRef(false);
-  // Tracks youtubeIds currently being fetched for the radio queue to prevent
-  // duplicate concurrent POST /api/downloads for the same track.
   const pendingRadioDownloadsRef = useRef<Set<string>>(new Set());
+
+  // ── Skip tracking: artistas saltados en <10s ─────────────────────────────
+  const skippedArtistsRef = useRef<Map<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem('vns_skipped_artists');
+      if (saved) return new Map(JSON.parse(saved));
+    } catch {}
+    return new Map();
+  } as any);
+  if (!(skippedArtistsRef.current instanceof Map)) skippedArtistsRef.current = new Map();
+
+  // ── Repetición: últimos 10 artistas del autoplay ─────────────────────────
+  const recentAutoplayArtistsRef = useRef<string[]>([]);
+
+  // ── Cola inteligente: próximas canciones predichas ───────────────────────
+  const [upcomingTracks, setUpcomingTracks] = useState<Song[]>([]);
 
   const sleepTimerTimeoutRef = useRef<number | null>(null);
   const sleepTimerTickRef = useRef<number | null>(null);
@@ -1461,26 +1476,63 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
               try {
                 const artist = state.currentSong.artist || state.currentSong.artist_name || '';
                 const title = state.currentSong.title || '';
-                const seedQuery = artist && artist !== 'Internet' && artist !== 'Desconocido' 
-                  ? `${artist} ${title} similar songs` 
-                  : `${title} similar music`;
-                  
+                const seedQuery = artist && artist !== 'Internet' && artist !== 'Desconocido'
+                  ? `${artist} official audio`
+                  : `${title} official audio`;
+
                 const res = await apiFetch(`/api/music/recommendations?seed=${encodeURIComponent(seedQuery)}`);
                 if (res.ok) {
                   const json = await res.json().catch(() => null);
                   const data: any[] = Array.isArray(json) ? json : Array.isArray((json as any)?.items) ? (json as any).items : [];
                   const currentPlaylistIds = new Set(state.currentPlaylist?.songs?.map((s) => String(s.id)) || []);
                   let newSongs = Array.isArray(data) ? data.filter((d) => !currentPlaylistIds.has(String(d.id))) : [];
-                  
+
                   if (newSongs.length > 0) {
-                    const scored = newSongs.map((it: any) => ({
-                       ...it,
-                       _score: rankRecommendationCandidate(title, artist, it)
-                    }))
+                    const recentArtists = recentAutoplayArtistsRef.current;
+                    const skipped = skippedArtistsRef.current;
+
+                    const scored = newSongs.map((it: any) => {
+                      let score = rankRecommendationCandidate(title, artist, it);
+                      const itArtist = (it.artist || it.uploader || '').toLowerCase().trim();
+
+                      // ── Penalizar artistas repetidos ────────────────────
+                      const recentIdx = recentArtists.findLastIndex((a) => a === itArtist);
+                      if (recentIdx !== -1) {
+                        const distFromEnd = recentArtists.length - 1 - recentIdx;
+                        if (distFromEnd < 3) score -= 60;       // últimas 3 → casi bloqueado
+                        else if (distFromEnd < 7) score -= 30;  // últimas 7 → penalizado
+                        else score -= 10;
+                      }
+
+                      // ── Penalizar artistas saltados ──────────────────────
+                      const skipCount = skipped.get(itArtist) || 0;
+                      if (skipCount >= 3) score -= 80;  // muy saltado → casi bloqueado
+                      else if (skipCount >= 2) score -= 40;
+                      else if (skipCount >= 1) score -= 15;
+
+                      return { ...it, _score: score };
+                    })
                     .filter((it: any) => it._score > -50 && !isTooSimilar(it.title, title))
                     .sort((a: any, b: any) => b._score - a._score);
-                    
+
                     if (scored.length > 0) newSongs = scored;
+                  }
+
+                  // Exponer próximas canciones en la cola
+                  if (newSongs.length > 1) {
+                    const upcoming = newSongs.slice(1, 4).map((it: any) => ({
+                      id: it.id,
+                      title: it.title,
+                      artist: it.artist || it.uploader || 'Desconocido',
+                      artist_name: it.artist || it.uploader || 'Desconocido',
+                      file_url: `${API_BASE}/api/downloads/stream/${it.id}`,
+                      imageUrl: it.thumbnail_url || it.image_url || '',
+                      image_url: it.thumbnail_url || it.image_url || '',
+                      duration_seconds: it.duration_seconds || 0,
+                      youtube_id: it.youtube_id || it.id,
+                      source: it.source || 'youtube',
+                    } as Song));
+                    setUpcomingTracks(upcoming);
                   }
 
                   if (newSongs.length > 0) {
@@ -1516,8 +1568,17 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
                     }
 
                     if (nextSong) {
-                      const newPlaylist = state.currentPlaylist ? { ...state.currentPlaylist, songs: [...(state.currentPlaylist.songs || []), nextSong] } : undefined;
-                      playSongInternal(nextSong, newPlaylist, isCrossfade, { userInitiated: false });
+                      // Registrar artista en historial de reproducción automática
+                      const nextArtist = (nextSong.artist || nextSong.artist_name || '').toLowerCase().trim();
+                      if (nextArtist) {
+                        recentAutoplayArtistsRef.current = [...recentAutoplayArtistsRef.current, nextArtist].slice(-10);
+                      }
+
+                      const newPlaylist = state.currentPlaylist
+                        ? { ...state.currentPlaylist, songs: [...(state.currentPlaylist.songs || []), nextSong] }
+                        : undefined;
+                      // ✅ Crossfade activado en autoplay
+                      playSongInternal(nextSong, newPlaylist, true, { userInitiated: false });
                       setIsPlaying(true);
                       autoplayBusyRef.current = false;
                       return;
@@ -1583,6 +1644,19 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
   const next = useCallback((e?: any) => {
     const isManualSkip = !(e?.detail?.isCrossfade);
     const isCrossfade = e?.detail?.isCrossfade === true;
+
+    // ── Skip tracking: si el usuario salta en <10s, penalizar artista ───────
+    if (isManualSkip && audioRef.current && audioRef.current.currentTime < 10 && currentSong) {
+      const skippedArtist = (currentSong.artist || currentSong.artist_name || '').toLowerCase().trim();
+      if (skippedArtist && skippedArtist !== 'desconocido' && skippedArtist !== 'internet') {
+        const prev = skippedArtistsRef.current.get(skippedArtist) || 0;
+        skippedArtistsRef.current.set(skippedArtist, prev + 1);
+        try {
+          localStorage.setItem('vns_skipped_artists', JSON.stringify([...skippedArtistsRef.current.entries()]));
+        } catch {}
+        console.log(`[skip-tracking] artist="${skippedArtist}" skips=${prev + 1}`);
+      }
+    }
 
     if (audioRef.current && audioRef.current.onended) {
       const originalRepeat = playerStateRef.current.repeatMode;
@@ -2005,8 +2079,9 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     favorites,
     playbackError,
     preparingTrackKey,
-      playingTrackKey,
-      playbackErrorTrackKey,
+    playingTrackKey,
+    playbackErrorTrackKey,
+    upcomingTracks,
     
     playSong,
     playTrack,
@@ -2034,7 +2109,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     currentPlaylist,
   }), [
     currentTrack, queue, isPlaying, volume, progress, duration, repeatMode,
-    shuffle, favorites, playbackError, preparingTrackKey, playingTrackKey, playbackErrorTrackKey, playSong, playTrack, pause,
+    shuffle, favorites, playbackError, preparingTrackKey, playingTrackKey, playbackErrorTrackKey, upcomingTracks, playSong, playTrack, pause,
     resume, next, previous, seek, toggleLike, toggleFavorite, toggleFavoriteSong, addToQueue,
     removeFromQueue, clearQueue, setSleepTimer, setVolume, togglePlay,
     toggleShuffle, cycleRepeat, reorderQueue, playNextFromQueueIndex, reset,

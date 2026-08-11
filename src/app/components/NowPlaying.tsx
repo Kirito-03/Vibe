@@ -66,6 +66,7 @@ export function NowPlaying({
     setSleepTimer: onSetSleepTimerMinutes,
     duration: realDuration,
     toggleLike,
+    upcomingTracks,
   } = usePlayback();
 
   const isLiked = !!currentTrack && favorites.has(getTrackKey(currentTrack));
@@ -672,13 +673,35 @@ export function NowPlaying({
                       </Droppable>
                     </DragDropContext>
 
-                    {queueSongs.filter((_, i) => i > currentIdx).length === 0 && (
+                    {queueSongs.filter((_, i) => i > currentIdx).length === 0 && (!upcomingTracks || upcomingTracks.length === 0) && (
                       <div className="flex flex-col items-center gap-3 py-12 text-center">
                         <ListMusic className="w-10 h-10 text-white/20" />
                         <p className="text-white/40 text-sm">No hay más canciones en la cola</p>
                         {isRadio && (
                           <p className="text-white/25 text-xs">La radio agregará canciones automáticamente</p>
                         )}
+                      </div>
+                    )}
+
+                    {upcomingTracks && upcomingTracks.length > 0 && (
+                      <div className="mt-8">
+                        <p className="text-[11px] uppercase tracking-widest text-white/30 font-semibold mb-3">Próximamente (Autoplay)</p>
+                        <div className="space-y-1 opacity-60">
+                          {upcomingTracks.map((s, i) => (
+                            <div key={`upcoming-${s.id}-${i}`} className="flex items-center gap-3 p-2.5 rounded-xl transition-colors hover:bg-white/5 group">
+                              <div className="w-4 h-4 flex-shrink-0 flex items-center justify-center">
+                                <Sparkles className="w-3 h-3 text-fuchsia-400" />
+                              </div>
+                              <div className="relative w-10 h-10 rounded-lg overflow-hidden bg-zinc-800 flex-shrink-0 opacity-80">
+                                <TrackCover src={s.imageUrl || s.image_url || ''} videoId={s.youtube_id || null} title={s.title} className="w-full h-full object-cover" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium truncate text-white">{s.title}</p>
+                                <p className="text-xs text-white/40 truncate">{s.artist || s.artist_name}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>

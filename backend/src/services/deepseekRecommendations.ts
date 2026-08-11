@@ -231,7 +231,7 @@ export const generateMusicSeedsWithDeepSeek = async (profile: MusicTasteProfile)
           { role: 'system', content: system },
           { role: 'user', content: user },
         ],
-        temperature: 0.7,
+        temperature: 0.5,
         max_tokens: 500,
       },
       {
