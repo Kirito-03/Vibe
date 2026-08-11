@@ -25,20 +25,36 @@ export function downloadToSong(d: Download) {
   const m = Math.floor(dur / 60);
   const s = dur % 60;
   
-  // Forzamos la ruta al archivo MP3 seguro en tu backend local
+  // Limpia títulos crudos (nombre de archivo del worker)
+  const sanitizeTitle = (raw: string): string => {
+    if (!raw) return 'Sin título';
+    let t = raw
+      .replace(/\.(mp3|mp4|webm|m4a|opus|flac|wav)$/i, '')  // elimina extensión
+      .replace(/\s+audio\s+(mp3|mp4|720|480|360|128|192|320)/gi, '')  // elimina " audio 720"
+      .replace(/^youtube[_ ]/i, '')     // elimina prefijo "youtube_" o "youtube "
+      .replace(/_/g, ' ')              // convierte underscores en espacios
+      .trim();
+    // Si queda solo el youtube_id o algo muy corto/raro, usar el original limpio
+    if (!t || t.length < 3 || /^[A-Za-z0-9_-]{11}$/.test(t)) return raw;
+    return t;
+  };
+
+  const cleanTitle = sanitizeTitle(d.title || '');
   const localStreamUrl = `${API_BASE || ''}/api/downloads/stream/${d.id}`;
   const who = d.uploader ?? d.artist ?? 'Desconocido';
+  // Limpiar uploader también si dice 'YouTube'
+  const cleanWho = (who === 'YouTube' || who === 'YouTube Music') ? 'Desconocido' : who;
   const cover = d.thumbnail ?? d.thumbnail_url ?? undefined;
 
   return {
     id: `dl-${d.id}`,
-    title: d.title,
-    artist: who,
-    artist_name: who,
+    title: cleanTitle,
+    artist: cleanWho,
+    artist_name: cleanWho,
     album: d.mode === 'audio' ? 'Audio' : 'Video',
     duration_seconds: dur,
     durationSecs: dur,
-    duration: `${m}:${s.toString().padStart(2, '0')}`,
+    duration: dur > 0 ? `${m}:${s.toString().padStart(2, '0')}` : '--:--',
     file_url: localStreamUrl,
     url: localStreamUrl,        // EL SELLO DEFINITIVO: Sobrescribe cualquier URL de YouTube
     source: 'local',            // LA ORDEN ABSOLUTA: Le ordena al reproductor usar el archivo local

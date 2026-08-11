@@ -415,11 +415,32 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
       uploader,
     } = dlData || {};
 
-    // Fallback if yt-dlp fails to get title and just returns the youtube id or a generated filename
-    const isWorkerFilename = title && (title.startsWith('youtube_') || title === filename || title === extractedYoutubeId);
-    const finalTitle = (!isWorkerFilename && title) ? title : (bodyTitle || title);
-    const finalUploader = (uploader && uploader !== 'Unknown') ? uploader : (bodyUploader || uploader || 'Desconocido');
-    const finalDuration = duration_seconds || bodyDuration || 0;
+    // Detecta si el título es un nombre de archivo crudo (no el título real de la canción)
+    const isRawFilename = (t: string) => {
+      if (!t) return true;
+      const low = t.toLowerCase();
+      return (
+        low.startsWith('youtube_') ||
+        low.startsWith('youtube ') ||    // e.g. "youtube A-rtCBnKO3U audio mp3 720.mp3"
+        low.includes(' audio mp3') ||
+        low.includes(' audio 720') ||
+        low.includes(' audio 480') ||
+        low.includes(' audio 360') ||
+        low.includes('.mp3') ||
+        low.includes('.mp4') ||
+        low.includes('.webm') ||
+        low.includes('.m4a') ||
+        t === filename ||
+        t === extractedYoutubeId
+      );
+    };
+    const finalTitle = !isRawFilename(title) ? title : (bodyTitle || title || 'Sin título');
+    const finalUploader = (uploader && uploader !== 'Unknown' && uploader !== 'YouTube' && uploader !== 'YouTube Music')
+      ? uploader
+      : (bodyUploader && bodyUploader !== 'YouTube' && bodyUploader !== 'YouTube Music'
+        ? bodyUploader
+        : (uploader || bodyUploader || 'Desconocido'));
+    const finalDuration = (duration_seconds && duration_seconds > 0) ? duration_seconds : (bodyDuration || 0);
     const finalThumbnail = thumbnail_url || bodyThumbnail || null;
 
     const normalizedTitle = String(finalTitle || '').trim();
