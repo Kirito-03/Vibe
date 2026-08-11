@@ -298,13 +298,13 @@ export const PlaybackProvider = ({ user, children }: PlaybackProviderProps) => {
   const pendingRadioDownloadsRef = useRef<Set<string>>(new Set());
 
   // ── Skip tracking: artistas saltados en <10s ─────────────────────────────
-  const skippedArtistsRef = useRef<Map<string, number>>(() => {
+  const skippedArtistsRef = useRef<Map<string, number>>((() => {
     try {
       const saved = localStorage.getItem('vns_skipped_artists');
       if (saved) return new Map(JSON.parse(saved));
     } catch {}
     return new Map();
-  } as any);
+  })());
   if (!(skippedArtistsRef.current instanceof Map)) skippedArtistsRef.current = new Map();
 
   // ── Repetición: últimos 10 artistas del autoplay ─────────────────────────
