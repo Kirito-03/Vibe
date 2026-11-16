@@ -13,13 +13,12 @@ const truncate = (input: string, max = 60) => {
   return `${s.slice(0, keep).trimEnd()}...`;
 };
 
-export const buildDocumentTitle = (song: Song | null, isPlaying: boolean) => {
+export const buildDocumentTitle = (song: Song | null, _isPlaying: boolean) => {
   const title = cleanText(song?.title);
   if (!title) return APP_TITLE;
   const artist = cleanText(song?.artist_name || song?.artist || 'Vibe');
-  const base = `${title} - ${artist || 'Vibe'}`;
-  const withPrefix = `${isPlaying ? '▶ ' : ''}${base}`;
-  return truncate(withPrefix, 60) || APP_TITLE;
+  const base = `${title} - ${artist || 'Vibe'} | Vibe`;
+  return truncate(base, 65) || APP_TITLE;
 };
 
 export const useDocumentTitle = (song: Song | null, isPlaying: boolean) => {

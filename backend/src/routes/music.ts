@@ -14,6 +14,7 @@ import { asyncHandler } from '../utils';
 
 import { isLikelyMusicTrack, rankForYouCandidate } from '../utils/trackQuality';
 import { rankRecommendationResults } from '../services/recommendationRanking';
+import { getMusicLyrics, getUpNext, searchMusic } from '../services/innertube';
 import {
   clearUserRecommendationCache,
   clearUserSeenTracks,
@@ -520,6 +521,20 @@ const findBestYoutubeMatch = async (query: string) => {
   const q = String(query || '').trim();
   if (!q) return null;
 
+  try {
+    const ytMusic = await searchMusic(q, 5);
+    if (ytMusic.length > 0) {
+      const first = ytMusic[0];
+      return {
+        youtube_id: first.youtube_id,
+        uploader: first.uploader,
+        duration: first.duration,
+        thumbnail: first.thumbnail,
+        url: first.url,
+      };
+    }
+  } catch {}
+
   for (const pyUrl of downloaderUrls) {
     try {
       const response = await axios.get(`${pyUrl}/search`, {
@@ -838,6 +853,18 @@ router.get('/for-you', asyncHandler(async (req, res) => {
     const runExternalSearch = async (q: string) => {
       let ytResults: any[] = [];
       const failures: any[] = [];
+      try {
+        const ytMusicItems = await searchMusic(q, 25);
+        if (ytMusicItems.length > 0) {
+          ytResults = adaptYouTubeRows(ytMusicItems, localKeys, localYoutubeIds);
+          if (ytResults.length > 0) {
+            console.log('[innertube/for-you] ok', { reqId, q: truncate(q, 90), items: ytResults.length });
+            return { items: ytResults, provider: 'youtube_music' as const };
+          }
+        }
+      } catch (itErr: any) {
+        console.warn('[innertube/for-you] fallback:', itErr?.message || itErr);
+      }
       for (const pyUrl of downloaderUrls) {
         try {
           console.log('[convert/search]', { reqId, url: pyUrl, timeoutMs: convertTimeoutMs, q: truncate(q, 90) });
@@ -1367,6 +1394,13 @@ router.get('/for-you', asyncHandler(async (req, res) => {
   } catch (error) {
     console.error('[music/for-you] error', { reqId, error: serializeError(error) });
     try {
+      const ytMusicFallback = await searchMusic(rawSeed || 'latin pop hits', 25);
+      if (ytMusicFallback.length > 0) {
+        const rows = adaptYouTubeRows(ytMusicFallback, new Set(), new Set());
+        const response: ItemsResponse<any> = { items: rows.slice(0, 30), source: 'default-search' };
+        console.log(`[music/for-you] reqId=${reqId} source=${response.source} items=${response.items.length} ms=${Date.now() - startedAt}`);
+        return res.json(response);
+      }
       const fallback = await searchDuckDuckGoForYoutube('bad bunny official audio', 25);
       const rows = adaptYouTubeRows(fallback, new Set(), new Set());
       const response: ItemsResponse<any> = { items: rows.slice(0, 30), source: rows.length > 0 ? 'default-search' : 'empty' };
@@ -1408,7 +1442,7 @@ const recommendationsHandler = async (req: any, res: any) => {
     // Obtener ids que ya están en local y sus datos
     const localResult = await pool.query(
       'SELECT id, youtube_id, title, uploader, duration, thumbnail, url, created_at FROM Downloads WHERE youtube_id IS NOT NULL ORDER BY created_at DESC LIMIT 2000'
-    );
+    ).catch(() => ({ rows: [] as any[] }));
     const localIds = new Set(localResult.rows.map((r: any) => r.youtube_id));
     const localMap = new Map();
     localResult.rows.forEach((r: any) => {
@@ -1633,7 +1667,21 @@ const recommendationsHandler = async (req: any, res: any) => {
       const failures: any[] = [];
 
       try {
-        for (const pyUrl of downloaderUrls) {
+        const ytMusicItems = await searchMusic(q, 25);
+        if (ytMusicItems.length > 0) {
+          batch = adaptYouTubeRows(ytMusicItems, localKeys, localIds, localMap);
+          if (batch.length > 0) {
+            hadConvertResults = true;
+            console.log('[innertube/recommendations] ok', { reqId, q: truncate(q, 90), items: batch.length });
+          }
+        }
+      } catch (itErr: any) {
+        console.warn('[innertube/recommendations] fallback:', itErr?.message || itErr);
+      }
+
+      if (batch.length === 0) {
+        try {
+          for (const pyUrl of downloaderUrls) {
           try {
             console.log('[convert/search]', { reqId, url: pyUrl, timeoutMs: convertTimeoutMs, q: truncate(q, 90) });
             const response = await axios.get(`${pyUrl}/search`, {
@@ -1656,6 +1704,7 @@ const recommendationsHandler = async (req: any, res: any) => {
           }
         }
       } catch {}
+      }
 
       if (batch.length === 0) {
         const health = await workerHealth();
@@ -2021,6 +2070,15 @@ const recommendationsHandler = async (req: any, res: any) => {
   } catch (error) {
     console.error('[music/recommendations] error', { reqId, error: serializeError(error) });
     try {
+      const ytMusicFallback = await searchMusic((typeof seed === 'string' && seed.trim()) || 'latin hits', 25);
+      if (ytMusicFallback.length > 0) {
+        const fallback = adaptYouTubeRows(ytMusicFallback, new Set(), new Set());
+        if (fallback.length > 0) {
+          const response: ItemsResponse<any> = { items: fallback.slice(0, 30), source: 'default-search' };
+          console.log(`[music/recommendations] reqId=${reqId} source=${response.source} items=${response.items.length} ms=${Date.now() - startedAt}`);
+          return res.json(response);
+        }
+      }
       const duckRows = await searchDuckDuckGoForYoutube('latin hits', 25);
       const fallback = adaptYouTubeRows(duckRows, new Set(), new Set());
       if (fallback.length > 0) {
@@ -2065,6 +2123,19 @@ router.post('/radio', asyncHandler(async (req, res) => {
     if (id) excludedIds.add(id);
   }
 
+  const seedYtId = extractYoutubeId(currentTrack?.youtube_id || currentTrack?.url || currentTrack?.id);
+  if (seedYtId) {
+    try {
+      const upNextItems = await getUpNext(seedYtId, 20);
+      const filtered = upNextItems.filter((it) => !excludedIds.has(it.youtube_id));
+      if (filtered.length > 0) {
+        return res.json({ items: filtered, source: 'youtube_music' });
+      }
+    } catch (itErr: any) {
+      console.warn('[innertube/radio] fallback:', itErr?.message || itErr);
+    }
+  }
+
   (req as any).query = {
     ...(req as any).query,
     seed,
@@ -2093,6 +2164,15 @@ router.get('/lyrics', asyncHandler(async (req, res) => {
         plain: response.data.plainLyrics
       });
     } else {
+      const youtubeId = extractYoutubeId(req.query.youtube_id);
+      if (youtubeId) {
+        try {
+          const ytLyrics = await getMusicLyrics(youtubeId);
+          if (ytLyrics?.lyrics) {
+            return res.json({ synced: null, plain: ytLyrics.lyrics, source: ytLyrics.source });
+          }
+        } catch {}
+      }
       res.status(404).json({ error: 'Lyrics not found' });
     }
   } catch (error) {
@@ -2107,6 +2187,15 @@ router.get('/lyrics', asyncHandler(async (req, res) => {
             plain: fallbackRes.data.plainLyrics
           });
         }
+      }
+      const youtubeId = extractYoutubeId(req.query.youtube_id);
+      if (youtubeId) {
+        try {
+          const ytLyrics = await getMusicLyrics(youtubeId);
+          if (ytLyrics?.lyrics) {
+            return res.json({ synced: null, plain: ytLyrics.lyrics, source: ytLyrics.source });
+          }
+        } catch {}
       }
       res.status(404).json({ error: 'Lyrics not found' });
     } catch {
@@ -2274,8 +2363,21 @@ router.get('/search', asyncHandler(async (req, res) => {
     return out;
   };
 
-  // ── 3. Búsqueda externa (Convert / Worker) ────────────────────────────────
+  // ── 3. Búsqueda externa (YouTube Music InnerTube primero, luego Convert / Worker) ──
   const searchViaConvertOrWorker = async (q: string) => {
+    try {
+      const ytMusicItems = await searchMusic(q, resultLimit);
+      if (ytMusicItems.length > 0) {
+        const items = adaptYouTubeRows(ytMusicItems, localKeys, localYoutubeIds);
+        if (items.length > 0) {
+          console.log('[innertube/search] ok', { reqId, q: truncate(q, 90), count: items.length });
+          return { items, provider: 'youtube_music' as const };
+        }
+      }
+    } catch (itErr: any) {
+      console.warn('[innertube/search] fallback:', itErr?.message || itErr);
+    }
+
     for (const pyUrl of downloaderUrls) {
       try {
         console.log('[convert/search]', { reqId, url: pyUrl, timeoutMs: convertTimeoutMs, q: truncate(q, 90), limit: resultLimit });
@@ -2418,6 +2520,10 @@ router.get('/search', asyncHandler(async (req, res) => {
 
     // ── 9. DeepSeek rerank opcional ──────────────────────────────────────────
     let finalItems = ranked.items;
+    // Si YouTube Music devolvió resultados pero rankSearchResults descartó coincidencias por alias/banda (ej. "zhiend" -> "marina, VISUAL ARTS / Key"), preservar el orden de YouTube Music.
+    if (primary.provider === 'youtube_music' && ytResults.length > 0 && finalItems.length < 5) {
+      finalItems = dedupeByYoutubeId([...localResults, ...finalItems, ...ytResults]).slice(0, resultLimit);
+    }
     let reranked = false;
     if (isSearchRerankEnabled() && finalItems.length > 1) {
       try {

@@ -16,6 +16,7 @@ import axios from 'axios';
 import { downloadWithWorker, extractWithWorker, isWorkerEnabled } from '../services/mediaWorkerClient';
 import { asyncHandler } from '../utils';
 import { upsertGlobalCatalogTracks } from '../services/recommendationStore';
+import { getDirectAudioUrl } from '../services/innertube';
 
 const router = Router();
 
@@ -252,8 +253,8 @@ router.get('/resolve', asyncHandler(async (req: Request, res: Response) => {
       audioUrl: `/api/downloads/stream/${existing.id}`,
     });
   } catch (error: any) {
-    console.error('[downloads] resolve error', { message: error?.message });
-    return res.status(500).json({ ok: false, error: 'Internal server error' });
+    console.warn('[downloads] resolve fallback (db unavailable):', error?.message);
+    return res.json({ ok: true, cached: false, source: 'db-unavailable' });
   }
 }));
 
@@ -593,6 +594,21 @@ router.get('/', async (req: Request, res: Response) => {
 // GET /api/downloads/stream-direct  →  Resolves YouTube URL → 302 to seekable CDN URL
 // MUST be defined BEFORE /:id to avoid Express wildcard conflict
 // ──────────────────────────────────────────────
+const extractYoutubeIdFromUrl = (rawUrl: string): string | null => {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.hostname.endsWith('youtu.be')) {
+      const id = parsed.pathname.replace(/^\/+/, '').split('/')[0];
+      return id || null;
+    }
+    const v = parsed.searchParams.get('v');
+    if (v) return v.trim();
+  } catch {
+    // ignore
+  }
+  return null;
+};
+
 router.get('/stream-direct', async (req: Request, res: Response) => {
   const { url } = req.query;
   if (!url || typeof url !== 'string') {
@@ -608,8 +624,21 @@ router.get('/stream-direct', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'URL inválida' });
   }
   try {
-    // Ask Python to extract the direct audio CDN URL via yt-dlp --get-url
-    // Python /stream-url already does this and returns { url: "https://rr*.googlevideo.com/..." }
+    // Primary: resolve direct audio CDN URL in memory via YouTube Music InnerTube and pipe Range-capable stream
+    const ytId = extractYoutubeIdFromUrl(url);
+    if (ytId) {
+      try {
+        const innertubeUrl = await getDirectAudioUrl(ytId);
+        if (innertubeUrl) {
+          console.log('[downloads] stream-direct innertube pipe ok', { ytId });
+          return await pipeRemoteToResponse(innertubeUrl, req, res);
+        }
+      } catch (itErr: any) {
+        console.warn('[downloads] stream-direct innertube fallback:', itErr?.message || itErr);
+      }
+    }
+
+    // Fallback: ask Python to extract the direct audio CDN URL via yt-dlp --get-url
     const pyRes = await axios.get(`${DOWNLOADER_URL}/stream-url?url=${encodeURIComponent(url)}`, {
       timeout: 130000,
       validateStatus: () => true,

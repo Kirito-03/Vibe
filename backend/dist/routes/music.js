@@ -37,6 +37,7 @@ const searchDeepseekRerank_1 = require("../services/searchDeepseekRerank");
 const utils_1 = require("../utils");
 const trackQuality_1 = require("../utils/trackQuality");
 const recommendationRanking_1 = require("../services/recommendationRanking");
+const innertube_1 = require("../services/innertube");
 const recommendationStore_1 = require("../services/recommendationStore");
 const router = (0, express_1.Router)();
 const normalizeBaseUrl = (raw) => raw.replace(/\/+$/, '');
@@ -201,6 +202,25 @@ const dedupeAndFilterItems = (items, exclude) => {
     }
     return { items: out, dedupedCount: items.length - out.length, skippedDuplicates };
 };
+const cleanTrackTitle = (title) => {
+    if (!title)
+        return '';
+    let t = title;
+    // Remover sufijos comunes de YouTube
+    t = t.replace(/(\(|\[)?\s*(official (music )?video|official audio|lyric video|lyrics|audio oficial|video oficial|video|audio|visualizer)\s*(\)|\])?/gi, '');
+    t = t.replace(/(\(|\[)?\s*(super slowed|slowed|reverb|slowed \+ reverb|extended|sped up|nightcore|ultra slowed)\s*(\)|\])?/gi, '');
+    t = t.replace(/(\(|\[)?\s*(4K|HD|HQ)\s*(\)|\])?/gi, '');
+    t = t.replace(/【.*?】/g, '');
+    // Limpiar guiones o espacios colgantes al final o inicio
+    t = t.replace(/\s*[-|]\s*$/, '');
+    t = t.replace(/^\s*[-|]\s*/, '');
+    // Quitar paréntesis vacíos que hayan quedado (e.g., "Song ()")
+    t = t.replace(/\(\s*\)/g, '');
+    t = t.replace(/\[\s*\]/g, '');
+    // Espacios dobles a simples
+    t = t.replace(/\s{2,}/g, ' ');
+    return t.trim() || title; // Si quedó vacío por error, retorna el original
+};
 const isNonMusicTitle = (title, uploader) => {
     if (!(0, trackQuality_1.isLikelyMusicTrack)(title, uploader))
         return true;
@@ -208,34 +228,75 @@ const isNonMusicTitle = (title, uploader) => {
     const u = normalizeText(uploader);
     if (!t)
         return true;
+    // Shorts
     if (/(^|\s)#?shorts(\s|$)/.test(t) || /(^|\s)#?shorts(\s|$)/.test(u))
         return true;
-    // Términos estrictamente prohibidos (películas, tutoriales, contenido hablado, anime episodes, etc.)
-    const filterRegex = /(^|\s)(tutorial|tutoriales|how to|curso|clase|lesson|gu[ií]a|review|an[áa]lisis|reaction|reacci[oó]n|gameplay|trailer|entrevista|interview|podcast|episode|episodio|ep\.|ep\s*#|cap[ií]tulo|capitulo|live|en vivo|directo|conferencia|stream|walkthrough|speedrun|vlog|pelicula|película|completa|full movie|movie|instagram reels|reels|tiktok|sonidos de reels|troll|trolleo|broma|prank|chiste|humor|risa|meme|parodia|shitpost|whatsapp|chat|reto|challenge|short|shorts|edit|edits|flp|fl studio|type beat|remake|historia|historias|history|responde|respond|explicaci[oó]n|analiza|tiradera|noticia|news|chisme|documentary|documental|biograf[ií]a|mensaje|mensajes|escena|scene|doblaje|temporada|season|clip|doblado|subtitulado|latino|español latino|castellano|te lo resumo|resumen|netflix|hbo|disney|prime video|cine|movies|peliculas|películas|dragon ball|naruto|one piece|surgimento|parte|part|pt\.)(\s|$)/;
-    if (filterRegex.test(t) || filterRegex.test(u))
-        return true;
-    if (t.includes('in spotify') || t.includes('tiktok version') || t.includes('tiktok remix'))
-        return true;
-    // Canales que usualmente suben películas o cosas no musicales
-    const badChannels = ['netflix', 'hbo', 'disney', 'prime video', 'cine', 'movies', 'clips', 'televisa', 'tv azteca', 'caracol', 'rcn', 'noticias', 'news', 'crunchyroll'];
+    // ── 1. Palabras exactas bloqueadas en título ──────────────────────────────
+    const titleBlocklist = [
+        // Compilaciones / listas
+        'megamix', 'mashup', 'playlist', 'compilation', 'recopilacion', 'recopilación',
+        'coleccion', 'colección', 'enganchados', 'enganchado', 'canciones de',
+        // Tops y rankings
+        'mejores canciones', 'mejores exitos', 'mejores éxitos', 'lo mas escuchado',
+        'lo más escuchado', 'más escuchadas', 'mas escuchadas', 'canciones mas',
+        'canciones más', 'novedades', 'éxitos', 'exitos', 'hits',
+        // Temporada / verano / disco
+        'verano', 'summer', 'navidad', 'navideñas', 'navideño', 'fiesta mix',
+        'discoteca', 'dj set', 'dj mix', 'noche de',
+        // Podcast / show / radio
+        'podcast', 'radio show', 'el show',
+        // Tutoriales / gaming
+        'tutorial', 'gameplay', 'walkthrough', 'vlog',
+        'roblox', 'minecraft', 'fortnite', 'gacha', 'fnf', 'audio codes',
+        // Karaoke / distorsionados
+        'karaoke', '8d audio', '8d music',
+        // Colecciones anime / OST
+        'openings anime', 'endings anime', 'ost collection',
+        'musica de', 'música de', 'canciones para',
+        // YouTube / streaming spam
+        'youtube', 'spotify playlist', 'apple music',
+        // Noticias / chisme
+        'noticias', 'chisme', 'tiradera',
+        // Meditación / chill mal etiquetado
+        'meditacion', 'meditación', 'relax mix', 'spa music',
+        // Año + contexto de ranking
+        'musica 2024', 'musica 2025', 'musica 2026', 'música 2024', 'música 2025', 'música 2026',
+    ];
+    for (const kw of titleBlocklist) {
+        if (t.includes(kw))
+            return true;
+    }
+    // ── 2. Regex patterns en título ──────────────────────────────────────────
+    const titleRegexes = [
+        /\btop\s+\d+\b/, // "top 20 canciones"
+        /\d+\s+(canciones|songs|tracks|temas)\b/, // "20 canciones"
+        /mejor(es)?\s+(de|del|para)/, // "mejores de"
+        /\bvol\.?\s*\d+\b/i, // "Vol 2"
+        /mix\s*(de|del|verano|2024|2025|2026)/i, // "Mix 2026"
+        /\d{4}\s*(megamix|mix|hits|éxitos|exitos)/, // "2026 hits"
+        /(éxitos|exitos|hits)\s*\d{4}/, // "hits 2026"
+        /lo\s+m[aá]s\s+(escuchado|popular|visto)/,
+        /(mejores|top)\s+(canciones|songs)\s+de/,
+        /en\s+(spotify|apple\s+music|tidal)/i,
+        /\bmix\b/i, // cualquier "mix"
+    ];
+    for (const re of titleRegexes) {
+        if (re.test(t))
+            return true;
+    }
+    // ── 3. Canales / uploaders malos ─────────────────────────────────────────
+    const badChannels = [
+        'netflix', 'hbo', 'disney', 'prime video', 'cine', 'movies', 'clips', 'televisa',
+        'tv azteca', 'caracol', 'rcn', 'noticias', 'news', 'crunchyroll',
+        'wowquepasa', 'pareciz', 'dj arbaiza', 'dj bomba', 'dj inot',
+        'vabo music', 'movimiento fresco', 'latin hype', 'latinhype',
+    ];
     if (u && badChannels.some(bc => u.includes(bc)))
         return true;
-    return t.includes('karaoke') ||
-        t.includes('8d') ||
-        /(^|\s)mix(\s|$)/.test(t) ||
-        t.includes('megamix') ||
-        t.includes('playlist') ||
-        t.includes('top') ||
-        t.includes('mejores') ||
-        t.includes('éxitos') ||
-        t.includes('exitos') ||
-        t.includes('recopilación') ||
-        t.includes('recopilacion') ||
-        t.includes('colección') ||
-        t.includes('coleccion') ||
-        t.includes('canciones de') ||
-        t.includes('enganchados') ||
-        t.includes('youtube');
+    // ── 4. Título excesivamente largo (listas y compilaciones) ───────────────
+    if (title.length > 110)
+        return true;
+    return false;
 };
 const parseDurationSeconds = (value) => {
     const n = Number(value);
@@ -435,7 +496,7 @@ const adaptYouTubeRows = (rows, localKeys, localYoutubeIds, localMap) => {
         return {
             id: ytId,
             youtube_id: ytId,
-            title: cleanSongTitle(yt.title),
+            title: cleanTrackTitle(yt.title),
             artist: cleanSongTitle((_d = (_c = yt.uploader) !== null && _c !== void 0 ? _c : yt.artist) !== null && _d !== void 0 ? _d : 'Internet'),
             uploader: cleanSongTitle((_f = (_e = yt.uploader) !== null && _e !== void 0 ? _e : yt.artist) !== null && _f !== void 0 ? _f : 'Internet'),
             duration: parseDurationSeconds((_h = (_g = yt.duration_seconds) !== null && _g !== void 0 ? _g : yt.lengthSeconds) !== null && _h !== void 0 ? _h : yt.duration),
@@ -487,6 +548,20 @@ const findBestYoutubeMatch = (query) => __awaiter(void 0, void 0, void 0, functi
     const q = String(query || '').trim();
     if (!q)
         return null;
+    try {
+        const ytMusic = yield (0, innertube_1.searchMusic)(q, 5);
+        if (ytMusic.length > 0) {
+            const first = ytMusic[0];
+            return {
+                youtube_id: first.youtube_id,
+                uploader: first.uploader,
+                duration: first.duration,
+                thumbnail: first.thumbnail,
+                url: first.url,
+            };
+        }
+    }
+    catch (_v) { }
     for (const pyUrl of downloaderUrls) {
         try {
             const response = yield axios_1.default.get(`${pyUrl}/search`, {
@@ -508,7 +583,7 @@ const findBestYoutubeMatch = (query) => __awaiter(void 0, void 0, void 0, functi
                 };
             }
         }
-        catch (_v) { }
+        catch (_w) { }
     }
     try {
         const rows = yield searchInvidious(q, 5);
@@ -526,7 +601,7 @@ const findBestYoutubeMatch = (query) => __awaiter(void 0, void 0, void 0, functi
             };
         }
     }
-    catch (_w) { }
+    catch (_x) { }
     try {
         const rows = yield searchDuckDuckGoForYoutube(q, 5);
         if (Array.isArray(rows) && rows.length > 0) {
@@ -543,7 +618,7 @@ const findBestYoutubeMatch = (query) => __awaiter(void 0, void 0, void 0, functi
             };
         }
     }
-    catch (_x) { }
+    catch (_y) { }
     return null;
 });
 const healDownloadRow = (row) => __awaiter(void 0, void 0, void 0, function* () {
@@ -662,7 +737,7 @@ const searchDuckDuckGoForYoutube = (query, limit) => __awaiter(void 0, void 0, v
             rows.push({
                 id: ytId,
                 youtube_id: ytId,
-                title,
+                title: cleanTrackTitle(title),
                 uploader: 'YouTube',
                 duration_seconds: null,
                 thumbnail_url: `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`,
@@ -801,6 +876,19 @@ router.get('/for-you', (0, utils_1.asyncHandler)((req, res) => __awaiter(void 0,
         const runExternalSearch = (q) => __awaiter(void 0, void 0, void 0, function* () {
             let ytResults = [];
             const failures = [];
+            try {
+                const ytMusicItems = yield (0, innertube_1.searchMusic)(q, 25);
+                if (ytMusicItems.length > 0) {
+                    ytResults = adaptYouTubeRows(ytMusicItems, localKeys, localYoutubeIds);
+                    if (ytResults.length > 0) {
+                        console.log('[innertube/for-you] ok', { reqId, q: truncate(q, 90), items: ytResults.length });
+                        return { items: ytResults, provider: 'youtube_music' };
+                    }
+                }
+            }
+            catch (itErr) {
+                console.warn('[innertube/for-you] fallback:', (itErr === null || itErr === void 0 ? void 0 : itErr.message) || itErr);
+            }
             for (const pyUrl of downloaderUrls) {
                 try {
                     console.log('[convert/search]', { reqId, url: pyUrl, timeoutMs: convertTimeoutMs, q: truncate(q, 90) });
@@ -1304,6 +1392,13 @@ router.get('/for-you', (0, utils_1.asyncHandler)((req, res) => __awaiter(void 0,
     catch (error) {
         console.error('[music/for-you] error', { reqId, error: serializeError(error) });
         try {
+            const ytMusicFallback = yield (0, innertube_1.searchMusic)(rawSeed || 'latin pop hits', 25);
+            if (ytMusicFallback.length > 0) {
+                const rows = adaptYouTubeRows(ytMusicFallback, new Set(), new Set());
+                const response = { items: rows.slice(0, 30), source: 'default-search' };
+                console.log(`[music/for-you] reqId=${reqId} source=${response.source} items=${response.items.length} ms=${Date.now() - startedAt}`);
+                return res.json(response);
+            }
             const fallback = yield searchDuckDuckGoForYoutube('bad bunny official audio', 25);
             const rows = adaptYouTubeRows(fallback, new Set(), new Set());
             const response = { items: rows.slice(0, 30), source: rows.length > 0 ? 'default-search' : 'empty' };
@@ -1339,7 +1434,7 @@ const recommendationsHandler = (req, res) => __awaiter(void 0, void 0, void 0, f
         const rawSeed = typeof seed === 'string' ? seed.replace(/similar music recommended/gi, '').trim() : '';
         const baseQuery = rawSeed ? `${rawSeed} audio` : '';
         // Obtener ids que ya están en local y sus datos
-        const localResult = yield db_1.default.query('SELECT id, youtube_id, title, uploader, duration, thumbnail, url, created_at FROM Downloads WHERE youtube_id IS NOT NULL ORDER BY created_at DESC LIMIT 2000');
+        const localResult = yield db_1.default.query('SELECT id, youtube_id, title, uploader, duration, thumbnail, url, created_at FROM Downloads WHERE youtube_id IS NOT NULL ORDER BY created_at DESC LIMIT 2000').catch(() => ({ rows: [] }));
         const localIds = new Set(localResult.rows.map((r) => r.youtube_id));
         const localMap = new Map();
         localResult.rows.forEach((r) => {
@@ -1573,31 +1668,46 @@ const recommendationsHandler = (req, res) => __awaiter(void 0, void 0, void 0, f
             let batch = [];
             const failures = [];
             try {
-                for (const pyUrl of downloaderUrls) {
-                    try {
-                        console.log('[convert/search]', { reqId, url: pyUrl, timeoutMs: convertTimeoutMs, q: truncate(q, 90) });
-                        const response = yield axios_1.default.get(`${pyUrl}/search`, {
-                            timeout: convertTimeoutMs,
-                            params: { q, limit: 30 },
-                        });
-                        const data = response.data;
-                        if (Array.isArray(data)) {
-                            batch = adaptYouTubeRows(data, localKeys, localIds, localMap);
-                            if (batch.length > 0) {
-                                hadConvertResults = true;
-                                console.log('[convert/search] ok', { reqId, url: pyUrl, items: batch.length });
-                                break;
-                            }
-                        }
-                    }
-                    catch (error) {
-                        console.warn('[convert/search] failed', Object.assign({ reqId, url: pyUrl }, serializeError(error)));
-                        failures.push(Object.assign({ url: pyUrl }, serializeError(error)));
-                        continue;
+                const ytMusicItems = yield (0, innertube_1.searchMusic)(q, 25);
+                if (ytMusicItems.length > 0) {
+                    batch = adaptYouTubeRows(ytMusicItems, localKeys, localIds, localMap);
+                    if (batch.length > 0) {
+                        hadConvertResults = true;
+                        console.log('[innertube/recommendations] ok', { reqId, q: truncate(q, 90), items: batch.length });
                     }
                 }
             }
-            catch (_h) { }
+            catch (itErr) {
+                console.warn('[innertube/recommendations] fallback:', (itErr === null || itErr === void 0 ? void 0 : itErr.message) || itErr);
+            }
+            if (batch.length === 0) {
+                try {
+                    for (const pyUrl of downloaderUrls) {
+                        try {
+                            console.log('[convert/search]', { reqId, url: pyUrl, timeoutMs: convertTimeoutMs, q: truncate(q, 90) });
+                            const response = yield axios_1.default.get(`${pyUrl}/search`, {
+                                timeout: convertTimeoutMs,
+                                params: { q, limit: 30 },
+                            });
+                            const data = response.data;
+                            if (Array.isArray(data)) {
+                                batch = adaptYouTubeRows(data, localKeys, localIds, localMap);
+                                if (batch.length > 0) {
+                                    hadConvertResults = true;
+                                    console.log('[convert/search] ok', { reqId, url: pyUrl, items: batch.length });
+                                    break;
+                                }
+                            }
+                        }
+                        catch (error) {
+                            console.warn('[convert/search] failed', Object.assign({ reqId, url: pyUrl }, serializeError(error)));
+                            failures.push(Object.assign({ url: pyUrl }, serializeError(error)));
+                            continue;
+                        }
+                    }
+                }
+                catch (_h) { }
+            }
             if (batch.length === 0) {
                 const health = yield (0, mediaWorkerClient_1.workerHealth)();
                 if (health.ok) {
@@ -1942,6 +2052,15 @@ const recommendationsHandler = (req, res) => __awaiter(void 0, void 0, void 0, f
     catch (error) {
         console.error('[music/recommendations] error', { reqId, error: serializeError(error) });
         try {
+            const ytMusicFallback = yield (0, innertube_1.searchMusic)((typeof seed === 'string' && seed.trim()) || 'latin hits', 25);
+            if (ytMusicFallback.length > 0) {
+                const fallback = adaptYouTubeRows(ytMusicFallback, new Set(), new Set());
+                if (fallback.length > 0) {
+                    const response = { items: fallback.slice(0, 30), source: 'default-search' };
+                    console.log(`[music/recommendations] reqId=${reqId} source=${response.source} items=${response.items.length} ms=${Date.now() - startedAt}`);
+                    return res.json(response);
+                }
+            }
             const duckRows = yield searchDuckDuckGoForYoutube('latin hits', 25);
             const fallback = adaptYouTubeRows(duckRows, new Set(), new Set());
             if (fallback.length > 0) {
@@ -1977,6 +2096,19 @@ router.post('/radio', (0, utils_1.asyncHandler)((req, res) => __awaiter(void 0, 
         if (id)
             excludedIds.add(id);
     }
+    const seedYtId = extractYoutubeId((currentTrack === null || currentTrack === void 0 ? void 0 : currentTrack.youtube_id) || (currentTrack === null || currentTrack === void 0 ? void 0 : currentTrack.url) || (currentTrack === null || currentTrack === void 0 ? void 0 : currentTrack.id));
+    if (seedYtId) {
+        try {
+            const upNextItems = yield (0, innertube_1.getUpNext)(seedYtId, 20);
+            const filtered = upNextItems.filter((it) => !excludedIds.has(it.youtube_id));
+            if (filtered.length > 0) {
+                return res.json({ items: filtered, source: 'youtube_music' });
+            }
+        }
+        catch (itErr) {
+            console.warn('[innertube/radio] fallback:', (itErr === null || itErr === void 0 ? void 0 : itErr.message) || itErr);
+        }
+    }
     req.query = Object.assign(Object.assign({}, req.query), { seed, exclude: Array.from(excludedIds).slice(0, 200).join(','), mode: 'radio' });
     return recommendationsHandler(req, res);
 })));
@@ -1997,6 +2129,16 @@ router.get('/lyrics', (0, utils_1.asyncHandler)((req, res) => __awaiter(void 0, 
             });
         }
         else {
+            const youtubeId = extractYoutubeId(req.query.youtube_id);
+            if (youtubeId) {
+                try {
+                    const ytLyrics = yield (0, innertube_1.getMusicLyrics)(youtubeId);
+                    if (ytLyrics === null || ytLyrics === void 0 ? void 0 : ytLyrics.lyrics) {
+                        return res.json({ synced: null, plain: ytLyrics.lyrics, source: ytLyrics.source });
+                    }
+                }
+                catch (_a) { }
+            }
             res.status(404).json({ error: 'Lyrics not found' });
         }
     }
@@ -2013,9 +2155,19 @@ router.get('/lyrics', (0, utils_1.asyncHandler)((req, res) => __awaiter(void 0, 
                     });
                 }
             }
+            const youtubeId = extractYoutubeId(req.query.youtube_id);
+            if (youtubeId) {
+                try {
+                    const ytLyrics = yield (0, innertube_1.getMusicLyrics)(youtubeId);
+                    if (ytLyrics === null || ytLyrics === void 0 ? void 0 : ytLyrics.lyrics) {
+                        return res.json({ synced: null, plain: ytLyrics.lyrics, source: ytLyrics.source });
+                    }
+                }
+                catch (_b) { }
+            }
             res.status(404).json({ error: 'Lyrics not found' });
         }
-        catch (_a) {
+        catch (_c) {
             res.status(500).json({ error: 'Error fetching lyrics' });
         }
     }
@@ -2165,9 +2317,22 @@ router.get('/search', (0, utils_1.asyncHandler)((req, res) => __awaiter(void 0, 
         }
         return out;
     };
-    // ── 3. Búsqueda externa (Convert / Worker) ────────────────────────────────
+    // ── 3. Búsqueda externa (YouTube Music InnerTube primero, luego Convert / Worker) ──
     const searchViaConvertOrWorker = (q) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
+        try {
+            const ytMusicItems = yield (0, innertube_1.searchMusic)(q, resultLimit);
+            if (ytMusicItems.length > 0) {
+                const items = adaptYouTubeRows(ytMusicItems, localKeys, localYoutubeIds);
+                if (items.length > 0) {
+                    console.log('[innertube/search] ok', { reqId, q: truncate(q, 90), count: items.length });
+                    return { items, provider: 'youtube_music' };
+                }
+            }
+        }
+        catch (itErr) {
+            console.warn('[innertube/search] fallback:', (itErr === null || itErr === void 0 ? void 0 : itErr.message) || itErr);
+        }
         for (const pyUrl of downloaderUrls) {
             try {
                 console.log('[convert/search]', { reqId, url: pyUrl, timeoutMs: convertTimeoutMs, q: truncate(q, 90), limit: resultLimit });
@@ -2314,6 +2479,10 @@ router.get('/search', (0, utils_1.asyncHandler)((req, res) => __awaiter(void 0, 
         const afterDedupe = ranked.afterRank;
         // ── 9. DeepSeek rerank opcional ──────────────────────────────────────────
         let finalItems = ranked.items;
+        // Si YouTube Music devolvió resultados pero rankSearchResults descartó coincidencias por alias/banda (ej. "zhiend" -> "marina, VISUAL ARTS / Key"), preservar el orden de YouTube Music.
+        if (primary.provider === 'youtube_music' && ytResults.length > 0 && finalItems.length < 5) {
+            finalItems = dedupeByYoutubeId([...localResults, ...finalItems, ...ytResults]).slice(0, resultLimit);
+        }
         let reranked = false;
         if ((0, searchDeepseekRerank_1.isSearchRerankEnabled)() && finalItems.length > 1) {
             try {

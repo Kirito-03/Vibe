@@ -416,13 +416,6 @@ return;
                         <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
                           <TrackFeedbackMenu track={d} />
                         </div>
-                        {d.source === 'youtube' && !isActive && !isDownloading && (
-                          <div className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <div className="bg-black/60 backdrop-blur-sm rounded-full p-1.5 border border-white/10 text-violet-400">
-                              <DownloadIcon className="w-4 h-4" />
-                            </div>
-                          </div>
-                        )}
                       </div>
                       <h4 className={`font-bold text-sm truncate ${
                         isActive ? 'text-violet-400' : 'text-white group-hover:text-violet-200 transition-colors'

@@ -201,26 +201,36 @@ const generateMusicSeedsWithDeepSeek = (profile) => __awaiter(void 0, void 0, vo
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
     const url = `${cfg.baseUrl}/chat/completions`;
+    const currentTrack = profile.currentTrack;
     const system = [
-        'Eres un asistente que genera queries cortas para buscar música (YouTube/Audio).',
-        'Debes responder SOLO con JSON válido y NADA MÁS.',
-        'No incluyas explicaciones, no uses markdown, no uses code fences.',
-        'No incluyas URLs.',
-        'Máximo 8 queries, sin duplicados, prioriza relación con el historial.',
-        'Evita contenido explícito innecesario.',
-        'Genera consultas para encontrar canciones reales, official audio/video, no tutoriales, no podcasts, no software, no cursos.',
-        'Formato de salida: {"queries":["..."]}',
+        'Eres un experto en música que genera queries de búsqueda para YouTube.',
+        'REGLAS ESTRICTAS:',
+        '- Responde SOLO con JSON válido. Sin explicaciones ni markdown.',
+        '- Formato: {"queries":["query 1","query 2",...]}',
+        '- Máximo 8 queries únicas.',
+        '- Cada query debe ser el NOMBRE DE UNA CANCIÓN INDIVIDUAL (no listas, no compilaciones).',
+        '- PROHIBIDO incluir: "mix", "top 20", "hits", "playlist", "compilation", "verano", "megamix", "novedades", "mejores", "discoteca", "dj set", "recopilación".',
+        '- USA el formato: "<artista> <canción> official audio" o "<artista> official audio".',
+        '- Si el usuario está escuchando algo ahora, genera canciones MUY SIMILARES a esa.',
+        '- Prioriza artistas del historial del usuario. Si no hay historial, usa artistas populares del idioma preferido.',
+        '- NO incluyas URLs ni años genéricos como "musica 2026".',
     ].join('\n');
-    const user = stableStringify({
+    const userParts = {
         preferredLanguage,
-        topArtists,
-        topGenres,
-        recentTracks,
-        likedTracks,
-        skippedPatterns: Array.isArray(profile.skippedPatterns) ? profile.skippedPatterns : [],
-        recentSearches,
-        currentTrack: profile.currentTrack || null,
-    });
+        topArtists: topArtists.slice(0, 8),
+        topGenres: topGenres.slice(0, 5),
+        recentTracks: recentTracks.slice(0, 8),
+        likedTracks: likedTracks.slice(0, 8),
+        recentSearches: recentSearches.slice(0, 6),
+    };
+    if ((currentTrack === null || currentTrack === void 0 ? void 0 : currentTrack.artist) || (currentTrack === null || currentTrack === void 0 ? void 0 : currentTrack.title)) {
+        userParts['ESCUCHANDO_AHORA'] = {
+            artista: currentTrack.artist || '',
+            cancion: currentTrack.title || '',
+            instruccion: 'Genera canciones similares a esta, del mismo artista o estilo.',
+        };
+    }
+    const user = stableStringify(userParts);
     try {
         const res = yield axios_1.default.post(url, {
             model: cfg.model,
@@ -228,7 +238,7 @@ const generateMusicSeedsWithDeepSeek = (profile) => __awaiter(void 0, void 0, vo
                 { role: 'system', content: system },
                 { role: 'user', content: user },
             ],
-            temperature: 0.7,
+            temperature: 0.5,
             max_tokens: 500,
         }, {
             signal: controller.signal,

@@ -818,41 +818,34 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
                 return { ...prev, songs: [...(prev.songs || []), newSong] };
               });
             } else {
-              // Skip if already downloading this youtubeId for radio
-              if (!recKey || pendingRadioDownloadsRef.current.has(recKey)) {
-                if (import.meta.env.DEV) console.debug(`[playback/radio-expand] skip already pending key=${recKey}`);
-                continue;
-              }
-              // Skip if already in playlist
+              if (!recKey) continue;
               const alreadyInPlaylist = playerStateRef.current.currentPlaylist?.songs?.some(
                 (s) => String(s.youtube_id) === recKey
               );
               if (alreadyInPlaylist) continue;
 
-              pendingRadioDownloadsRef.current.add(recKey);
+              const watchUrl = makeSafeYoutubeWatchUrl(recKey);
+              const streamSong: Song = {
+                id: recKey,
+                title: rec.title,
+                artist: rec.artist || rec.uploader || 'Desconocido',
+                artist_name: rec.artist || rec.uploader || 'Desconocido',
+                file_url: `${API_BASE}/api/downloads/stream-direct?url=${encodeURIComponent(watchUrl)}`,
+                imageUrl: rec.thumbnail_url || rec.image_url || rec.thumbnail || '',
+                image_url: rec.thumbnail_url || rec.image_url || rec.thumbnail || '',
+                duration: rec.duration_seconds || rec.duration || 0,
+                duration_seconds: rec.duration_seconds || rec.duration || 0,
+                source: rec.source || 'youtube_music',
+                youtube_id: recKey,
+                url: watchUrl,
+              } as Song;
+
               downloadedCount++;
-              if (import.meta.env.DEV) console.debug(`[playback/radio-expand] downloading key=${recKey}`);
-              try {
-                // Sequential await — one download at a time to prevent DB race
-                const dlRes = await apiFetch(`/api/downloads`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ url: rec.url, title: rec.title, uploader: rec.uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: rec.youtube_id || rec.id, duration: rec.duration_seconds || rec.duration || 0, thumbnail: rec.thumbnail_url || rec.thumbnail || null }),
-                });
-                const dlData = dlRes.ok ? await dlRes.json().catch(() => null) : null;
-                if (dlData && dlData.id) {
-                  const downloadedSong = downloadToSong(dlData);
-                  setCurrentPlaylist((prev) => {
-                    if (!prev || prev.id !== targetPlaylistId) return prev;
-                    if (prev.songs?.some((s) => s.id === downloadedSong.id || String(s.youtube_id) === String(rec.youtube_id || rec.id))) return prev;
-                    return { ...prev, songs: [...(prev.songs || []), downloadedSong] };
-                  });
-                }
-              } catch {
-                // Ignore individual download errors — radio continues
-              } finally {
-                pendingRadioDownloadsRef.current.delete(recKey);
-              }
+              setCurrentPlaylist((prev) => {
+                if (!prev || prev.id !== targetPlaylistId) return prev;
+                if (prev.songs?.some((s) => String(s.youtube_id) === recKey)) return prev;
+                return { ...prev, songs: [...(prev.songs || []), streamSong] };
+              });
             }
           }
         } finally {
@@ -953,7 +946,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
     }
 
     const isMyGen = () => playGenRef.current === myGen;
-    if (!finalAudioUrl || finalAudioUrl.includes('youtube.com') || finalAudioUrl.includes('youtu.be') || finalAudioUrl.includes('stream-direct')) {
+    if (!finalAudioUrl || finalAudioUrl.includes('youtube.com') || finalAudioUrl.includes('youtu.be') || finalAudioUrl.includes('stream-direct') || finalAudioUrl.includes('/api/downloads/stream/')) {
       
       console.log('[playback/prepare] start');
       try {
@@ -1011,57 +1004,9 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
 
         if (!isMyGen() || currentPrepareRequestRef.current !== requestId) return;
 
-        // Reproducir inmediatamente con stream-direct
+        // Reproducir inmediatamente con stream-direct (sin descargas al disco del servidor)
         finalAudioUrl = streamDirectUrl;
         console.log('[playback/prepare] stream-direct ready — reproduciendo ahora');
-
-        // ── PASO 3: Descarga en background para caché local ───────────────────
-        // No esperamos — se ejecuta en paralelo mientras la música ya suena
-        const downloadInBackground = async () => {
-          try {
-            console.log('[playback/bg-download] start youtubeId=' + ytId);
-            const dlRes = await apiFetch('/api/downloads', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                url: youtubeWatchUrl,
-                title: song.title,
-                uploader: song.artist,
-                mode: 'audio',
-                youtube_id: ytId,
-                duration: song.duration_seconds || song.durationSecs || 0,
-                thumbnail: song.image_url || song.imageUrl || null
-              })
-            });
-            const dlData = await dlRes.json().catch(() => null);
-            
-            if (dlData?.status === 'preparing' && dlData?.jobId) {
-              // Esperar en background hasta que esté lista
-              let attempts = 90; // 3 minutos máximo
-              while (attempts > 0) {
-                await new Promise(r => setTimeout(r, 2000));
-                const statRes = await apiFetch(`/api/downloads/status/${dlData.jobId}`);
-                const statData = await statRes.json().catch(() => null);
-                if (statData?.status === 'ready') {
-                  console.log('[playback/bg-download] cached audioUrl=' + statData.audioUrl);
-                  break;
-                } else if (statData?.status === 'failed') {
-                  console.warn('[playback/bg-download] failed — stream-direct seguirá funcionando');
-                  break;
-                }
-                attempts--;
-              }
-            } else if (dlData?.status === 'ready') {
-              console.log('[playback/bg-download] instant-cache audioUrl=' + dlData.audioUrl);
-            }
-          } catch (e: any) {
-            // No afecta la reproducción actual — es solo para caché futura
-            console.warn('[playback/bg-download] error (no crítico):', e?.message);
-          }
-        };
-
-        // Lanzar en background sin await
-        void downloadInBackground();
         
       } catch (err: any) {
         // Si es un cache hit, finalAudioUrl ya está seteado, continuar
@@ -1394,38 +1339,34 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
                         return { ...prev, songs: [...(prev.songs || []), newSong] };
                       });
                     } else {
-                      if (!recKey || pendingRadioDownloadsRef.current.has(recKey)) {
-                        if (import.meta.env.DEV) console.debug(`[playback/radio-expand] skip already pending key=${recKey}`);
-                        continue;
-                      }
+                      if (!recKey) continue;
                       const alreadyInPlaylist = playerStateRef.current.currentPlaylist?.songs?.some(
                         (s) => String(s.youtube_id) === recKey
                       );
                       if (alreadyInPlaylist) continue;
 
-                      pendingRadioDownloadsRef.current.add(recKey);
+                      const watchUrl = makeSafeYoutubeWatchUrl(recKey);
+                      const streamSong: Song = {
+                        id: recKey,
+                        title: rec.title,
+                        artist: rec.artist || rec.uploader || 'Desconocido',
+                        artist_name: rec.artist || rec.uploader || 'Desconocido',
+                        file_url: `${API_BASE}/api/downloads/stream-direct?url=${encodeURIComponent(watchUrl)}`,
+                        imageUrl: rec.thumbnail_url || rec.image_url || rec.thumbnail || '',
+                        image_url: rec.thumbnail_url || rec.image_url || rec.thumbnail || '',
+                        duration: rec.duration_seconds || rec.duration || 0,
+                        duration_seconds: rec.duration_seconds || rec.duration || 0,
+                        source: rec.source || 'youtube_music',
+                        youtube_id: recKey,
+                        url: watchUrl,
+                      } as Song;
+
                       downloadedCount++;
-                      if (import.meta.env.DEV) console.debug(`[playback/radio-expand] downloading key=${recKey}`);
-                      try {
-                        const dlRes = await apiFetch(`/api/downloads`, {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ url: makeSafeYoutubeWatchUrl(rec.youtube_id || rec.id), title: rec.title, uploader: rec.uploader, mode: 'audio', quality: settings.audioQuality, youtube_id: rec.youtube_id || rec.id, duration: rec.duration_seconds || rec.duration || 0, thumbnail: rec.thumbnail_url || rec.thumbnail || null }),
-                        });
-                        const dlData = dlRes.ok ? await dlRes.json().catch(() => null) : null;
-                        if (dlData && dlData.id) {
-                          const downloadedSong = downloadToSong(dlData);
-                          setCurrentPlaylist((prev) => {
-                            if (!prev || prev.id !== targetId) return prev;
-                            if (prev.songs?.some((s) => s.id === downloadedSong.id || String(s.youtube_id) === String(rec.youtube_id || rec.id))) return prev;
-                            return { ...prev, songs: [...(prev.songs || []), downloadedSong] };
-                          });
-                        }
-                      } catch {
-                        // Ignore individual download errors
-                      } finally {
-                        pendingRadioDownloadsRef.current.delete(recKey);
-                      }
+                      setCurrentPlaylist((prev) => {
+                        if (!prev || prev.id !== targetId) return prev;
+                        if (prev.songs?.some((s) => String(s.youtube_id) === recKey)) return prev;
+                        return { ...prev, songs: [...(prev.songs || []), streamSong] };
+                      });
                     }
                   }
                 })

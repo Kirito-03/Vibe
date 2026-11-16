@@ -29,6 +29,7 @@ const axios_1 = __importDefault(require("axios"));
 const mediaWorkerClient_1 = require("../services/mediaWorkerClient");
 const utils_1 = require("../utils");
 const recommendationStore_1 = require("../services/recommendationStore");
+const innertube_1 = require("../services/innertube");
 const router = (0, express_1.Router)();
 const DOWNLOADER_URL = process.env.DOWNLOADER_URL || 'http://convert:8000';
 const MEDIA_BASE_DIR = process.env.MEDIA_BASE_DIR || '/app/downloads';
@@ -257,8 +258,8 @@ router.get('/resolve', (0, utils_1.asyncHandler)((req, res) => __awaiter(void 0,
         });
     }
     catch (error) {
-        console.error('[downloads] resolve error', { message: error === null || error === void 0 ? void 0 : error.message });
-        return res.status(500).json({ ok: false, error: 'Internal server error' });
+        console.warn('[downloads] resolve fallback (db unavailable):', error === null || error === void 0 ? void 0 : error.message);
+        return res.json({ ok: true, cached: false, source: 'db-unavailable' });
     }
 })));
 const downloadsStatusMap = new Map();
@@ -289,7 +290,7 @@ router.post('/', (0, utils_1.asyncHandler)((req, res) => __awaiter(void 0, void 
         }
         catch (e) { }
     }
-    const { url, mode = 'audio', quality = 'high', youtube_id, title: bodyTitle, uploader: bodyUploader } = finalBody;
+    const { url, mode = 'audio', quality = 'high', youtube_id, title: bodyTitle, uploader: bodyUploader, duration: bodyDuration, thumbnail: bodyThumbnail } = finalBody;
     if (!url) {
         return res.status(400).json({ ok: false, code: 'MISSING_TRACK_SOURCE', message: 'Missing youtubeId/sourceId/url' });
     }
@@ -387,9 +388,32 @@ router.post('/', (0, utils_1.asyncHandler)((req, res) => __awaiter(void 0, void 
                 }
             }
             const { title, filename, file_path, duration_seconds, thumbnail_url, uploader, } = dlData || {};
-            // Fallback if yt-dlp fails to get title and just returns the youtube id
-            const finalTitle = (title && title !== extractedYoutubeId && title !== filename) ? title : (bodyTitle || title);
-            const finalUploader = (uploader && uploader !== 'Unknown') ? uploader : (bodyUploader || uploader || 'Desconocido');
+            // Detecta si el título es un nombre de archivo crudo (no el título real de la canción)
+            const isRawFilename = (t) => {
+                if (!t)
+                    return true;
+                const low = t.toLowerCase();
+                return (low.startsWith('youtube_') ||
+                    low.startsWith('youtube ') || // e.g. "youtube A-rtCBnKO3U audio mp3 720.mp3"
+                    low.includes(' audio mp3') ||
+                    low.includes(' audio 720') ||
+                    low.includes(' audio 480') ||
+                    low.includes(' audio 360') ||
+                    low.includes('.mp3') ||
+                    low.includes('.mp4') ||
+                    low.includes('.webm') ||
+                    low.includes('.m4a') ||
+                    t === filename ||
+                    t === extractedYoutubeId);
+            };
+            const finalTitle = !isRawFilename(title) ? title : (bodyTitle || title || 'Sin título');
+            const finalUploader = (uploader && uploader !== 'Unknown' && uploader !== 'YouTube' && uploader !== 'YouTube Music')
+                ? uploader
+                : (bodyUploader && bodyUploader !== 'YouTube' && bodyUploader !== 'YouTube Music'
+                    ? bodyUploader
+                    : (uploader || bodyUploader || 'Desconocido'));
+            const finalDuration = (duration_seconds && duration_seconds > 0) ? duration_seconds : (bodyDuration || 0);
+            const finalThumbnail = thumbnail_url || bodyThumbnail || null;
             const normalizedTitle = String(finalTitle || '').trim();
             const normalizedArtist = String(finalUploader || '').trim();
             const existingByMetadata = yield db_1.default.query(`SELECT * FROM Downloads
@@ -423,10 +447,10 @@ router.post('/', (0, utils_1.asyncHandler)((req, res) => __awaiter(void 0, void 
            thumbnail = EXCLUDED.thumbnail,
            url = EXCLUDED.url
          RETURNING *`, [
-                    normalizedTitle,
-                    normalizedArtist || null,
-                    duration_seconds || null,
-                    thumbnail_url || `https://i.ytimg.com/vi/${extractedYoutubeId}/hqdefault.jpg`,
+                    finalTitle || 'Unknown',
+                    finalUploader,
+                    finalDuration,
+                    finalThumbnail || `https://i.ytimg.com/vi/${extractedYoutubeId}/hqdefault.jpg`,
                     file_path,
                     mode,
                     extractedYoutubeId,
@@ -515,6 +539,22 @@ router.get('/', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
 // GET /api/downloads/stream-direct  →  Resolves YouTube URL → 302 to seekable CDN URL
 // MUST be defined BEFORE /:id to avoid Express wildcard conflict
 // ──────────────────────────────────────────────
+const extractYoutubeIdFromUrl = (rawUrl) => {
+    try {
+        const parsed = new URL(rawUrl);
+        if (parsed.hostname.endsWith('youtu.be')) {
+            const id = parsed.pathname.replace(/^\/+/, '').split('/')[0];
+            return id || null;
+        }
+        const v = parsed.searchParams.get('v');
+        if (v)
+            return v.trim();
+    }
+    catch (_a) {
+        // ignore
+    }
+    return null;
+};
 router.get('/stream-direct', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const { url } = req.query;
@@ -532,8 +572,21 @@ router.get('/stream-direct', (req, res) => __awaiter(void 0, void 0, void 0, fun
         return res.status(400).json({ error: 'URL inválida' });
     }
     try {
-        // Ask Python to extract the direct audio CDN URL via yt-dlp --get-url
-        // Python /stream-url already does this and returns { url: "https://rr*.googlevideo.com/..." }
+        // Primary: resolve direct audio CDN URL in memory via YouTube Music InnerTube and pipe Range-capable stream
+        const ytId = extractYoutubeIdFromUrl(url);
+        if (ytId) {
+            try {
+                const innertubeUrl = yield (0, innertube_1.getDirectAudioUrl)(ytId);
+                if (innertubeUrl) {
+                    console.log('[downloads] stream-direct innertube pipe ok', { ytId });
+                    return yield pipeRemoteToResponse(innertubeUrl, req, res);
+                }
+            }
+            catch (itErr) {
+                console.warn('[downloads] stream-direct innertube fallback:', (itErr === null || itErr === void 0 ? void 0 : itErr.message) || itErr);
+            }
+        }
+        // Fallback: ask Python to extract the direct audio CDN URL via yt-dlp --get-url
         const pyRes = yield axios_1.default.get(`${DOWNLOADER_URL}/stream-url?url=${encodeURIComponent(url)}`, {
             timeout: 130000,
             validateStatus: () => true,

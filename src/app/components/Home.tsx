@@ -240,30 +240,6 @@ export function Home({
           },
         };
 
-        // Seeds por defecto sin historial (basados en artistas reales, no en géneros genéricos)
-        let seedForYou = 'karol g bichota official audio';
-        let seedRecs = 'bad bunny un verano sin ti official audio';
-
-        if (activePill !== 'Todo' && pillSeedMap[activePill]) {
-          seedForYou = pillSeedMap[activePill].forYou;
-          seedRecs = pillSeedMap[activePill].discover;
-        } else if (activePill === 'Todo' && songs.length > 0) {
-          const artists = songs.map(s => s.artist).filter(a => a && a !== 'Internet' && a !== 'Desconocido' && a !== 'YouTube');
-          const cleanTitles = songs.map(s => s.title.split('-')[0].split('(')[0].trim()).filter(Boolean);
-          
-          if (artists.length > 0) {
-            const uniqueArtists = Array.from(new Set(artists));
-            // Queries con nombres de artistas reales generan resultados de canciones individuales, no compilaciones
-            seedForYou = `${uniqueArtists[0]} official audio`;
-            seedRecs = uniqueArtists.length > 1
-              ? `${uniqueArtists[1]} official audio`
-              : (cleanTitles[0] ? `${cleanTitles[0]} official audio` : seedRecs);
-          } else if (cleanTitles.length > 0) {
-            seedForYou = `${cleanTitles[0]} official audio`;
-            seedRecs = cleanTitles.length > 1 ? `${cleanTitles[1]} official audio` : seedRecs;
-          }
-        }
-
         const fallbackForYouSeeds = [
           'karol g official audio',
           'bad bunny official audio',
@@ -278,7 +254,36 @@ export function Home({
           'shakira official audio',
           'ozuna official audio',
           'rauw alejandro official audio',
+          'the weeknd official audio',
+          'feid official audio',
+          'dua lipa official audio',
         ];
+
+        // Seeds por defecto sin historial (basados en artistas reales, no en géneros genéricos)
+        let seedForYou = 'karol g bichota official audio';
+        let seedRecs = fallbackDiscoverSeeds[Math.floor(Math.random() * fallbackDiscoverSeeds.length)];
+
+        if (activePill !== 'Todo' && pillSeedMap[activePill]) {
+          seedForYou = pillSeedMap[activePill].forYou;
+          seedRecs = pillSeedMap[activePill].discover;
+        } else if (activePill === 'Todo' && songs.length > 0) {
+          const artists = songs.map(s => s.artist).filter(a => a && a !== 'Internet' && a !== 'Desconocido' && a !== 'YouTube');
+          const cleanTitles = songs.map(s => s.title.split('-')[0].split('(')[0].trim()).filter(Boolean);
+          
+          if (artists.length > 0) {
+            const uniqueArtists = Array.from(new Set(artists));
+            seedForYou = `${uniqueArtists[0]} official audio`;
+            // Para "Descubre nueva música" usar un artista diferente para evitar repetir solo la última búsqueda
+            const differentDiscover = fallbackDiscoverSeeds.filter(
+              (s) => !uniqueArtists.some((a) => s.toLowerCase().includes(a.toLowerCase()))
+            );
+            seedRecs = differentDiscover.length > 0
+              ? differentDiscover[Math.floor(Math.random() * differentDiscover.length)]
+              : fallbackDiscoverSeeds[0];
+          } else if (cleanTitles.length > 0) {
+            seedForYou = `${cleanTitles[0]} official audio`;
+          }
+        }
 
         const fetchItemsWithTimeout = async <T,>(path: string, timeoutMs = 15000) => {
           const controller = new AbortController();
@@ -497,40 +502,50 @@ export function Home({
         console.error(err);}
     }
   };
+  const loadMoreSeeds = [
+    'feid official audio',
+    'rauw alejandro official audio',
+    'the weeknd official audio',
+    'dua lipa official audio',
+    'bad bunny official audio',
+    'karol g official audio',
+    'shakira official audio',
+    'kendrick lamar official audio',
+  ];
+
   const handleScroll = (e: React.UIEvent<HTMLDivElement>, type: 'foryou' | 'recommendations') => {
     const target = e.currentTarget;
-    const isAtEnd = target.scrollLeft + target.clientWidth >= target.scrollWidth - 100;
+    const isAtEnd = target.scrollLeft + target.clientWidth >= target.scrollWidth - 150;
     
     if (isAtEnd && !loadingMore) {
       setLoadingMore(true);
+      const nextSeed = loadMoreSeeds[Math.floor(Math.random() * loadMoreSeeds.length)];
       if (type === 'foryou') {
-        // Cargar más for you
-        apiFetchItems<any>(`/api/music/for-you`)
+        apiFetchItems<any>(`/api/music/for-you?seed=${encodeURIComponent(nextSeed)}&refresh=1`)
           .then(({ items }) => {
             if (Array.isArray(items) && items.length > 0) {
               home.setForYouItems((prev) => {
-                const newIds = new Set(prev.map((p) => p.id));
-                const uniqueNew = items.filter((d: any) => !newIds.has(d.id));
+                const newIds = new Set(prev.map((p) => p.youtube_id || p.id));
+                const uniqueNew = items.filter((d: any) => !newIds.has(d.youtube_id || d.id));
                 return [...prev, ...uniqueNew];
               });
             }
           })
           .catch(() => {})
-          .finally(() => setTimeout(() => setLoadingMore(false), 1000));
+          .finally(() => setTimeout(() => setLoadingMore(false), 800));
       } else {
-        // Cargar más recomendaciones
-        apiFetchItems<any>(`/api/music/recommendations`)
+        apiFetchItems<any>(`/api/music/recommendations?seed=${encodeURIComponent(nextSeed)}&refresh=1`)
           .then(({ items }) => {
             if (Array.isArray(items) && items.length > 0) {
               home.setRecommendationsItems((prev) => {
-                const newIds = new Set(prev.map((p) => p.id));
-                const uniqueNew = items.filter((d: any) => !newIds.has(d.id));
+                const newIds = new Set(prev.map((p) => p.youtube_id || p.id));
+                const uniqueNew = items.filter((d: any) => !newIds.has(d.youtube_id || d.id));
                 return [...prev, ...uniqueNew];
               });
             }
           })
           .catch(() => {})
-          .finally(() => setTimeout(() => setLoadingMore(false), 1000));
+          .finally(() => setTimeout(() => setLoadingMore(false), 800));
       }
     }
   };
@@ -630,10 +645,11 @@ export function Home({
           </div>
           <div 
             ref={paraTiRef}
+            onScroll={(e) => handleScroll(e, 'foryou')}
             className="flex gap-4 overflow-x-auto scroll-smooth no-scrollbar pb-2"
             style={{ scrollbarWidth: 'none' }}
           >
-            {randomPicks.slice(0, 15).map((d: any) => {
+            {randomPicks.map((d: any) => {
               const ytId = d.youtube_id || String(d.id || '');
               const imgSrc = d.thumbnail_url || d.image_url || d.imageUrl || '';
               const artistName = d.artist && d.artist !== 'YouTube' && d.artist !== 'YouTube Music' && d.artist !== 'Internet'
@@ -670,10 +686,11 @@ export function Home({
           </div>
           <div 
             ref={descubreRef}
+            onScroll={(e) => handleScroll(e, 'recommendations')}
             className="flex gap-4 overflow-x-auto scroll-smooth no-scrollbar pb-2"
             style={{ scrollbarWidth: 'none' }}
           >
-            {recommendations.slice(0, 15).map((d: any) => {
+            {recommendations.map((d: any) => {
               const ytId = d.youtube_id || String(d.id || '');
               const imgSrc = d.thumbnail_url || d.image_url || d.imageUrl || '';
               const artistName = d.artist && d.artist !== 'YouTube' && d.artist !== 'YouTube Music' && d.artist !== 'Internet'
