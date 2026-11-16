@@ -513,6 +513,22 @@ export function Home({
     'kendrick lamar official audio',
   ];
 
+  const dedupeTracks = (list: any[]) => {
+    const seenIds = new Set<string>();
+    const seenTitleArtist = new Set<string>();
+    return list.filter((item: any) => {
+      const id = String(item?.youtube_id || item?.id || '').trim();
+      const normTitle = String(item?.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const normArtist = String(item?.artist || item?.uploader || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const taKey = normTitle ? `${normTitle}::${normArtist}` : '';
+      if (id && seenIds.has(id)) return false;
+      if (taKey && seenTitleArtist.has(taKey)) return false;
+      if (id) seenIds.add(id);
+      if (taKey) seenTitleArtist.add(taKey);
+      return true;
+    });
+  };
+
   const handleScroll = (e: React.UIEvent<HTMLDivElement>, type: 'foryou' | 'recommendations') => {
     const target = e.currentTarget;
     const isAtEnd = target.scrollLeft + target.clientWidth >= target.scrollWidth - 150;
@@ -524,11 +540,7 @@ export function Home({
         apiFetchItems<any>(`/api/music/for-you?seed=${encodeURIComponent(nextSeed)}&refresh=1`)
           .then(({ items }) => {
             if (Array.isArray(items) && items.length > 0) {
-              home.setForYouItems((prev) => {
-                const newIds = new Set(prev.map((p) => p.youtube_id || p.id));
-                const uniqueNew = items.filter((d: any) => !newIds.has(d.youtube_id || d.id));
-                return [...prev, ...uniqueNew];
-              });
+              home.setForYouItems((prev) => dedupeTracks([...prev, ...items]));
             }
           })
           .catch(() => {})
@@ -537,11 +549,7 @@ export function Home({
         apiFetchItems<any>(`/api/music/recommendations?seed=${encodeURIComponent(nextSeed)}&refresh=1`)
           .then(({ items }) => {
             if (Array.isArray(items) && items.length > 0) {
-              home.setRecommendationsItems((prev) => {
-                const newIds = new Set(prev.map((p) => p.youtube_id || p.id));
-                const uniqueNew = items.filter((d: any) => !newIds.has(d.youtube_id || d.id));
-                return [...prev, ...uniqueNew];
-              });
+              home.setRecommendationsItems((prev) => dedupeTracks([...prev, ...items]));
             }
           })
           .catch(() => {})
@@ -649,7 +657,7 @@ export function Home({
             className="flex gap-4 overflow-x-auto scroll-smooth no-scrollbar pb-2"
             style={{ scrollbarWidth: 'none' }}
           >
-            {randomPicks.map((d: any) => {
+            {dedupeTracks(randomPicks).map((d: any) => {
               const ytId = d.youtube_id || String(d.id || '');
               const imgSrc = d.thumbnail_url || d.image_url || d.imageUrl || '';
               const artistName = d.artist && d.artist !== 'YouTube' && d.artist !== 'YouTube Music' && d.artist !== 'Internet'
@@ -690,7 +698,7 @@ export function Home({
             className="flex gap-4 overflow-x-auto scroll-smooth no-scrollbar pb-2"
             style={{ scrollbarWidth: 'none' }}
           >
-            {recommendations.map((d: any) => {
+            {dedupeTracks(recommendations).map((d: any) => {
               const ytId = d.youtube_id || String(d.id || '');
               const imgSrc = d.thumbnail_url || d.image_url || d.imageUrl || '';
               const artistName = d.artist && d.artist !== 'YouTube' && d.artist !== 'YouTube Music' && d.artist !== 'Internet'

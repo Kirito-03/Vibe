@@ -57,6 +57,6 @@ export const TrackCover = ({ src, videoId, title = '', className }: TrackCoverPr
     );
   }
 
-  return <img src={value} alt={title} className={className} onError={onError} />;
+  return <img src={value} alt={title} className={className} referrerPolicy="no-referrer" onError={onError} />;
 };
 

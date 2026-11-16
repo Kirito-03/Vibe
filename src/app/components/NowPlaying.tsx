@@ -220,7 +220,7 @@ export function NowPlaying({
   if (song) {
     total = (typeof song.duration === 'string' && song.duration.includes(':')) ? song.duration : formatDuration(durSecs);
   }
-  const img     = song?.imageUrl ?? song?.image_url ?? '';
+  const img     = song?.imageUrl || song?.image_url || (song as any)?.thumbnail_url || (song as any)?.thumbnail || '';
   const queueSongs = playlist?.songs ?? [];
   const currentIdx = queueSongs.findIndex(x => x.id === song?.id);
   const isRadio = String(playlist?.id || '').startsWith('radio-');
@@ -352,7 +352,7 @@ export function NowPlaying({
                       boxShadow: '0 40px 120px rgba(0,0,0,0.95), 0 0 60px rgba(139,92,246,0.2)'
                     }}
                   >
-                    <TrackCover src={img} videoId={song.youtube_id || null} title={song.title} className="w-full h-full object-cover" />
+                    <TrackCover key={`${song.id}:${img}`} src={img} videoId={song.youtube_id || song.id || null} title={song.title} className="w-full h-full object-cover" />
                     <div className="absolute inset-0 rounded-[28px]" style={{ boxShadow: 'inset 0 0 40px rgba(0,0,0,0.3)' }} />
                   </motion.div>
                 </div>
