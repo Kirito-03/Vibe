@@ -1,4 +1,5 @@
 import vm from 'node:vm';
+import { cacheGetJson, cacheSetJson } from './redisCache';
 
 export interface MusicTrackResult {
   id: string;
@@ -22,8 +23,10 @@ const nativeImport = new Function('specifier', 'return import(specifier)') as <T
 let ytPromise: Promise<any> | null = null;
 let evalRegistered = false;
 
-const audioUrlCache = new Map<string, { url: string; expiresAt: number }>();
-const AUDIO_URL_TTL_MS = 15 * 60 * 1000;
+const SEARCH_CACHE_TTL_SEC = 30 * 60;
+const AUDIO_URL_TTL_SEC = 20 * 60;
+const UPNEXT_CACHE_TTL_SEC = 30 * 60;
+const LYRICS_CACHE_TTL_SEC = 24 * 60 * 60;
 
 const upgradeThumbnailUrl = (rawUrl: string | undefined, youtubeId: string): string => {
   const clean = String(rawUrl || '').trim();
@@ -113,6 +116,10 @@ export const searchMusic = async (query: string, limit = 20): Promise<MusicTrack
   const q = String(query || '').trim();
   if (!q) return [];
 
+  const cacheKey = `vibe:ytm:search:${q.toLowerCase()}:${limit}`;
+  const cached = await cacheGetJson<MusicTrackResult[]>(cacheKey);
+  if (cached && cached.length > 0) return cached;
+
   const yt = await getInnertube();
   let res = await yt.music.search(q, { type: 'song' });
   let contents: any[] = res?.songs?.contents ?? res?.results ?? [];
@@ -131,6 +138,9 @@ export const searchMusic = async (query: string, limit = 20): Promise<MusicTrack
     out.push(mapped);
     if (out.length >= limit) break;
   }
+  if (out.length > 0) {
+    void cacheSetJson(cacheKey, out, SEARCH_CACHE_TTL_SEC);
+  }
   return out;
 };
 
@@ -138,9 +148,10 @@ export const getDirectAudioUrl = async (youtubeId: string): Promise<string | nul
   const ytId = String(youtubeId || '').trim();
   if (!ytId) return null;
 
-  const cached = audioUrlCache.get(ytId);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.url;
+  const cacheKey = `vibe:ytm:audio:${ytId}`;
+  const cachedUrl = await cacheGetJson<string>(cacheKey);
+  if (cachedUrl && cachedUrl.startsWith('http')) {
+    return cachedUrl;
   }
 
   const yt = await getInnertube();
@@ -169,13 +180,17 @@ export const getDirectAudioUrl = async (youtubeId: string): Promise<string | nul
   const resolvedUrl = fmt.url ? String(fmt.url) : String(await fmt.decipher(yt.session.player));
   if (!resolvedUrl || !resolvedUrl.startsWith('http')) return null;
 
-  audioUrlCache.set(ytId, { url: resolvedUrl, expiresAt: Date.now() + AUDIO_URL_TTL_MS });
+  void cacheSetJson(cacheKey, resolvedUrl, AUDIO_URL_TTL_SEC);
   return resolvedUrl;
 };
 
 export const getUpNext = async (youtubeId: string, limit = 15): Promise<MusicTrackResult[]> => {
   const ytId = String(youtubeId || '').trim();
   if (!ytId) return [];
+
+  const cacheKey = `vibe:ytm:upnext:${ytId}:${limit}`;
+  const cached = await cacheGetJson<MusicTrackResult[]>(cacheKey);
+  if (cached && cached.length > 0) return cached;
 
   const yt = await getInnertube();
   const upNext = await yt.music.getUpNext(ytId);
@@ -190,6 +205,9 @@ export const getUpNext = async (youtubeId: string, limit = 15): Promise<MusicTra
     out.push(mapped);
     if (out.length >= limit) break;
   }
+  if (out.length > 0) {
+    void cacheSetJson(cacheKey, out, UPNEXT_CACHE_TTL_SEC);
+  }
   return out;
 };
 
@@ -197,13 +215,19 @@ export const getMusicLyrics = async (youtubeId: string): Promise<{ lyrics: strin
   const ytId = String(youtubeId || '').trim();
   if (!ytId) return null;
 
+  const cacheKey = `vibe:ytm:lyrics:${ytId}`;
+  const cached = await cacheGetJson<{ lyrics: string; source: string }>(cacheKey);
+  if (cached?.lyrics) return cached;
+
   const yt = await getInnertube();
   const res = await yt.music.getLyrics(ytId);
   const text = String(res?.description?.text ?? '').trim();
   if (!text) return null;
 
-  return {
+  const result = {
     lyrics: text,
     source: String(res?.footer?.text ?? 'YouTube Music').trim() || 'YouTube Music',
   };
+  void cacheSetJson(cacheKey, result, LYRICS_CACHE_TTL_SEC);
+  return result;
 };

@@ -22,6 +22,7 @@
     "express-rate-limit": "^8.6.2",
     "firebase-admin": "^13.6.1",
     "helmet": "^8.3.0",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.18.0",
     "youtubei.js": "^18.3.0"
