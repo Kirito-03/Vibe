@@ -314,12 +314,13 @@ export function Home({
 
         const fetchDiscover = async (seed: string) => {
           const refreshParam = refreshNonce ? `&refresh=1&r=${refreshNonce}` : '';
-          const userSeedIds = activePill === 'Todo'
-            ? Array.from(new Set(songs.map((s) => String(s.youtube_id || '').trim()).filter(Boolean))).slice(0, 4)
-            : [];
-          const seedIdsParam = userSeedIds.length > 0 ? `&seedIds=${encodeURIComponent(userSeedIds.join(','))}` : '';
+          const allUniqueIds = Array.from(new Set(songs.map((s) => String(s.youtube_id || '').trim()).filter(Boolean)));
+          const forYouIds = allUniqueIds.slice(0, 3);
+          const discoverSeedIds = activePill === 'Todo' ? allUniqueIds.slice(3, 6) : [];
+          const seedIdsParam = discoverSeedIds.length > 0 ? `&seedIds=${encodeURIComponent(discoverSeedIds.join(','))}` : '';
+          const excludeParam = forYouIds.length > 0 ? `&exclude=${encodeURIComponent(forYouIds.join(','))}` : '';
           const { res, items, source } = await fetchItemsWithTimeout<any>(
-            `/api/music/recommendations?seed=${encodeURIComponent(seed)}${seedIdsParam}${refreshParam}`,
+            `/api/music/recommendations?seed=${encodeURIComponent(seed)}${seedIdsParam}${excludeParam}${refreshParam}`,
             15000
           );
           if (!res.ok) {
