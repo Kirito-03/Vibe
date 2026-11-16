@@ -825,6 +825,70 @@ router.delete('/recommendation-cache', asyncHandler(async (req, res) => {
   return res.json({ ok: true, deleted: result.deleted });
 }));
 
+const buildDiverseInnertubeMix = async (opts: {
+  seedIds?: string[];
+  queries?: string[];
+  excludedIds?: Set<string>;
+  maxPerArtist?: number;
+  limit?: number;
+}) => {
+  const excluded = new Set<string>(opts.excludedIds || []);
+  const seedIds = (opts.seedIds || []).map((s) => String(s || '').trim()).filter(Boolean).slice(0, 3);
+  for (const sid of seedIds) excluded.add(sid);
+
+  let batches: any[][] = [];
+  if (seedIds.length > 0) {
+    const upNextResults = await Promise.allSettled(seedIds.map((id) => getUpNext(id, 12)));
+    batches = upNextResults
+      .filter((r): r is PromiseFulfilledResult<any[]> => r.status === 'fulfilled' && Array.isArray(r.value))
+      .map((r) => r.value);
+  }
+
+  if (batches.length === 0 && opts.queries && opts.queries.length > 0) {
+    const searchResults = await Promise.allSettled(opts.queries.slice(0, 3).map((q) => searchMusic(q, 12)));
+    batches = searchResults
+      .filter((r): r is PromiseFulfilledResult<any[]> => r.status === 'fulfilled' && Array.isArray(r.value))
+      .map((r) => r.value);
+  }
+
+  if (batches.length === 0) return [];
+
+  const interleaved: any[] = [];
+  const maxLen = Math.max(...batches.map((b) => b.length));
+  for (let i = 0; i < maxLen; i++) {
+    for (const b of batches) {
+      if (b[i]) interleaved.push(b[i]);
+    }
+  }
+
+  const maxPerArtist = opts.maxPerArtist ?? 2;
+  const limit = opts.limit ?? 20;
+  const seenIds = new Set<string>();
+  const seenTa = new Set<string>();
+  const artistCount = new Map<string, number>();
+  const out: any[] = [];
+
+  for (const it of interleaved) {
+    const id = String(it?.youtube_id || it?.id || '').trim();
+    if (!id || excluded.has(id) || seenIds.has(id)) continue;
+    const normTitle = String(it?.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const rawArtist = String(it?.artist || it?.uploader || '').trim();
+    const primaryArtist = rawArtist.split(',')[0].trim().toLowerCase();
+    const taKey = `${normTitle}::${primaryArtist}`;
+    if (seenTa.has(taKey)) continue;
+    const count = artistCount.get(primaryArtist) || 0;
+    if (primaryArtist && count >= maxPerArtist) continue;
+
+    seenIds.add(id);
+    seenTa.add(taKey);
+    if (primaryArtist) artistCount.set(primaryArtist, count + 1);
+    out.push(it);
+    if (out.length >= limit) break;
+  }
+
+  return out;
+};
+
 // ── GET /api/music/for-you — Combinar DB local y recomendaciones ──
 router.get('/for-you', asyncHandler(async (req, res) => {
   const reqId = makeReqId();
@@ -840,6 +904,26 @@ router.get('/for-you', asyncHandler(async (req, res) => {
     'anime music official audio',
     'lofi beats official audio',
   ];
+
+  // Fast diverse For You mix (max 2 tracks per artist)
+  try {
+    const rawSeedIds = typeof req.query.seedIds === 'string' && req.query.seedIds.trim()
+      ? req.query.seedIds.split(',').map((s: string) => s.trim()).filter(Boolean)
+      : [];
+    const shuffledDefaults = [...defaultForYouTerms].sort(() => Math.random() - 0.5);
+    const queries = rawSeed ? [rawSeed, shuffledDefaults[0], shuffledDefaults[1]] : shuffledDefaults.slice(0, 3);
+    const diverseItems = await buildDiverseInnertubeMix({
+      seedIds: rawSeedIds,
+      queries,
+      maxPerArtist: 2,
+      limit: 20,
+    });
+    if (diverseItems.length > 0) {
+      return res.json({ items: diverseItems, source: rawSeedIds.length > 0 ? 'personalized' : 'default-search' });
+    }
+  } catch (fastErr: any) {
+    console.warn('[innertube/for-you] fallback:', fastErr?.message || fastErr);
+  }
 
   try {
     const localResult = await pool.query(
@@ -1431,70 +1515,25 @@ const recommendationsHandler = async (req: any, res: any) => {
       const parsedSeedIds = typeof seedIds === 'string' && seedIds.trim()
         ? seedIds.split(',').map((s: string) => s.trim()).filter(Boolean).slice(0, 3)
         : [];
-      for (const sid of parsedSeedIds) excludedIds.add(sid);
-
-      let batches: any[][] = [];
-      if (parsedSeedIds.length > 0) {
-        const upNextResults = await Promise.allSettled(parsedSeedIds.map((id: string) => getUpNext(id, 10)));
-        batches = upNextResults
-          .filter((r): r is PromiseFulfilledResult<any[]> => r.status === 'fulfilled' && Array.isArray(r.value))
-          .map((r) => r.value);
-      }
-
-      if (batches.length === 0) {
-        const baseSeed = typeof seed === 'string' && seed.trim() ? seed.trim() : '';
-        const diversePool = [
-          'latin pop hits',
-          'pop hits',
-          'electronic chill',
-          'rock classics',
-          'r&b soul hits',
-          'anime openings',
-        ].sort(() => Math.random() - 0.5);
-        const queries = baseSeed
-          ? [baseSeed, diversePool[0], diversePool[1]]
-          : diversePool.slice(0, 3);
-        const searchResults = await Promise.allSettled(queries.map((q: string) => searchMusic(q, 10)));
-        batches = searchResults
-          .filter((r): r is PromiseFulfilledResult<any[]> => r.status === 'fulfilled' && Array.isArray(r.value))
-          .map((r) => r.value);
-      }
-
-      if (batches.length > 0) {
-        const interleaved: any[] = [];
-        const maxLen = Math.max(...batches.map((b) => b.length));
-        for (let i = 0; i < maxLen; i++) {
-          for (const b of batches) {
-            if (b[i]) interleaved.push(b[i]);
-          }
-        }
-
-        const seenIds = new Set<string>();
-        const seenTa = new Set<string>();
-        const artistCount = new Map<string, number>();
-        const diverseItems: any[] = [];
-
-        for (const it of interleaved) {
-          const id = String(it?.youtube_id || it?.id || '').trim();
-          if (!id || excludedIds.has(id) || seenIds.has(id)) continue;
-          const normTitle = String(it?.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-          const rawArtist = String(it?.artist || it?.uploader || '').trim();
-          const primaryArtist = rawArtist.split(',')[0].trim().toLowerCase();
-          const taKey = `${normTitle}::${primaryArtist}`;
-          if (seenTa.has(taKey)) continue;
-          const count = artistCount.get(primaryArtist) || 0;
-          if (primaryArtist && count >= 2) continue;
-
-          seenIds.add(id);
-          seenTa.add(taKey);
-          if (primaryArtist) artistCount.set(primaryArtist, count + 1);
-          diverseItems.push(it);
-          if (diverseItems.length >= 20) break;
-        }
-
-        if (diverseItems.length > 0) {
-          return res.json({ items: diverseItems, source: parsedSeedIds.length > 0 ? 'personalized' : 'default-search' });
-        }
+      const baseSeed = typeof seed === 'string' && seed.trim() ? seed.trim() : '';
+      const diversePool = [
+        'latin pop hits',
+        'pop hits',
+        'electronic chill',
+        'rock classics',
+        'r&b soul hits',
+        'top hits 2025',
+      ].sort(() => Math.random() - 0.5);
+      const queries = baseSeed ? [baseSeed, diversePool[0], diversePool[1]] : diversePool.slice(0, 3);
+      const diverseItems = await buildDiverseInnertubeMix({
+        seedIds: parsedSeedIds,
+        queries,
+        excludedIds,
+        maxPerArtist: 2,
+        limit: 20,
+      });
+      if (diverseItems.length > 0) {
+        return res.json({ items: diverseItems, source: parsedSeedIds.length > 0 ? 'personalized' : 'default-search' });
       }
     } catch (fastErr: any) {
       console.warn('[innertube/discover] fallback:', fastErr?.message || fastErr);

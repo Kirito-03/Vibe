@@ -298,8 +298,12 @@ export function Home({
 
         const fetchForYou = async (seed: string) => {
           const refreshParam = refreshNonce ? `&refresh=1&r=${refreshNonce}` : '';
+          const userSeedIds = activePill === 'Todo'
+            ? Array.from(new Set(songs.map((s) => String(s.youtube_id || '').trim()).filter(Boolean))).slice(0, 3)
+            : [];
+          const seedIdsParam = userSeedIds.length > 0 ? `&seedIds=${encodeURIComponent(userSeedIds.join(','))}` : '';
           const { res, items, source } = await fetchItemsWithTimeout<any>(
-            `/api/music/for-you?seed=${encodeURIComponent(seed)}${refreshParam}`,
+            `/api/music/for-you?seed=${encodeURIComponent(seed)}${seedIdsParam}${refreshParam}`,
             15000
           );
           if (!res.ok) {
