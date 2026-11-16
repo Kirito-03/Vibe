@@ -789,7 +789,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
           // Process recommendations sequentially, max 3 per expansion, to prevent
           // parallel POST /api/downloads that cause ON CONFLICT race in PostgreSQL.
           let downloadedCount = 0;
-          const MAX_RADIO_DOWNLOADS = 3;
+          const MAX_RADIO_DOWNLOADS = 10;
 
           if (import.meta.env.DEV) console.debug('[radio/expand] start', { candidates: strictRecs.length, limited: MAX_RADIO_DOWNLOADS });
 
@@ -1310,7 +1310,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
 
                   // Process sequentially, max 3, with dedup to prevent DB race
                   let downloadedCount = 0;
-                  const MAX_RADIO_DOWNLOADS = 3;
+                  const MAX_RADIO_DOWNLOADS = 10;
 
                   if (import.meta.env.DEV) console.debug('[radio/expand] start', { candidates: strictRecs.length, limited: MAX_RADIO_DOWNLOADS });
 
@@ -1408,9 +1408,9 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
           else if (state.repeatMode === 'all') playSongInternal(songs[0], state.currentPlaylist, isCrossfade, { userInitiated: false });
           else { setIsPlaying(false); setProgress(0); }
         } else {
-          const idx = songs.findIndex((s) => s.id === state.currentSong?.id);
-          if (idx !== -1 && idx < songs.length - 1) playSongInternal(songs[idx + 1], state.currentPlaylist, isCrossfade, { userInitiated: false });
-          else if (idx !== -1 && state.repeatMode === 'all') playSongInternal(songs[0], state.currentPlaylist, isCrossfade, { userInitiated: false });
+          const idx = songs.findIndex((s) => s.id === state.currentSong?.id || (s.youtube_id && s.youtube_id === state.currentSong?.youtube_id));
+          if (idx !== -1 && idx < songs.length - 1) playSongInternal(songs[idx + 1], state.currentPlaylist, isCrossfade, { userInitiated: Boolean(isManualSkip) });
+          else if (idx !== -1 && state.repeatMode === 'all') playSongInternal(songs[0], state.currentPlaylist, isCrossfade, { userInitiated: Boolean(isManualSkip) });
           else {
             if (settings.autoplay && !autoplayBusyRef.current && state.currentSong) {
               autoplayBusyRef.current = true;
@@ -1420,8 +1420,9 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
                 const seedQuery = artist && artist !== 'Internet' && artist !== 'Desconocido'
                   ? `${artist} official audio`
                   : `${title} official audio`;
+                const ytSeedParam = state.currentSong.youtube_id ? `&seedIds=${encodeURIComponent(state.currentSong.youtube_id)}` : '';
 
-                const res = await apiFetch(`/api/music/recommendations?seed=${encodeURIComponent(seedQuery)}`);
+                const res = await apiFetch(`/api/music/recommendations?seed=${encodeURIComponent(seedQuery)}${ytSeedParam}`);
                 if (res.ok) {
                   const json = await res.json().catch(() => null);
                   const data: any[] = Array.isArray(json) ? json : Array.isArray((json as any)?.items) ? (json as any).items : [];
@@ -1461,7 +1462,7 @@ function buildPlayableTrackFromRepair(original: any, candidate: any) {
 
                   // Exponer próximas canciones en la cola
                   if (newSongs.length > 1) {
-                    const upcoming = newSongs.slice(1, 4).map((it: any) => ({
+                    const upcoming = newSongs.slice(1, 11).map((it: any) => ({
                       id: it.id,
                       title: it.title,
                       artist: it.artist || it.uploader || 'Desconocido',
